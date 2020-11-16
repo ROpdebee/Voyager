@@ -1,0 +1,7 @@
+__pycache__
+.coverage
+.coverage.*
+htmlcov
+.mypy_cache
+data
+.DS_Store

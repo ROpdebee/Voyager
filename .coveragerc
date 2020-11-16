@@ -1,0 +1,16 @@
+[run]
+branch = True
+omit = 
+    tests/conftest.py
+    tests/test_smoke.py
+
+[report]
+exclude_lines = 
+    pragma: no cover
+    ^\s*if TYPE_CHECKING:
+    @overload
+    ^\s*\.\.\.$
+    raise NotImplementedError()
+    @pytest.mark.xfail
+    @pytest.mark.integration
+    @pytest.mark.smoke

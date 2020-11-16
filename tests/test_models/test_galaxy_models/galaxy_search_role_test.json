@@ -1,0 +1,88 @@
+{
+    "id": 24559,
+    "url": "/api/v1/roles/24559/",
+    "related": {
+        "content_type": "/api/v1/content_types/11/",
+        "dependencies": "/api/v1/roles/24559/dependencies/",
+        "imports": "/api/v1/roles/24559/imports/"
+    },
+    "summary_fields": {
+        "content_type": {
+            "id": 11,
+            "name": "role",
+            "description": "Role"
+        },
+        "dependencies": [],
+        "namespace": {
+            "id": 766,
+            "name": "00willo",
+            "avatar_url": "https://avatars3.githubusercontent.com/u/6183357?v=4",
+            "location": "Wollongong, NSW, Australia",
+            "company": null,
+            "email": null,
+            "html_url": "https://github.com/00willo",
+            "is_vendor": false
+        },
+        "platforms": [
+            {
+                "name": "Fedora",
+                "release": "27"
+            }
+        ],
+        "provider_namespace": {
+            "id": 758,
+            "name": "00willo"
+        },
+        "repository": {
+            "id": 56683,
+            "name": "sublimetext-3",
+            "original_name": "ansible-role_sublimetext",
+            "stargazers_count": 0,
+            "watchers_count": 1,
+            "forks_count": 0,
+            "open_issues_count": 0,
+            "travis_status_url": "https://travis-ci.org/00willo/ansible-role_sublimetext.svg?branch=master",
+            "travis_build_url": "https://travis-ci.org/00willo/ansible-role_sublimetext/builds/525219582",
+            "format": "role",
+            "deprecated": false,
+            "community_score": null,
+            "quality_score": 5.0,
+            "community_survey_count": 0
+        },
+        "tags": [
+            "development",
+            "editor",
+            "ide",
+            "workstation"
+        ],
+        "versions": [],
+        "videos": []
+    },
+    "created": "2018-03-24T22:04:38.877173Z",
+    "modified": "2019-04-27T03:03:27.227524Z",
+    "name": "sublimetext-3",
+    "role_type": "ANS",
+    "is_valid": true,
+    "min_ansible_version": "2.1",
+    "license": "license MIT",
+    "company": "",
+    "description": "Install Sublime Text 3 on your machine. Supports both the dev and stable release channels.",
+    "travis_status_url": "https://travis-ci.org/00willo/ansible-role_sublimetext.svg?branch=master",
+    "download_count": 39,
+    "imported": "2019-04-26T23:03:27.101139-04:00",
+    "relevance": 0.216113808940178,
+    "search_rank": 0.0,
+    "download_rank": 0.0604835588634493,
+    "username": "00willo",
+    "active": true,
+    "github_user": "00willo",
+    "github_repo": "ansible-role_sublimetext",
+    "github_branch": "master",
+    "stargazers_count": 0,
+    "forks_count": 0,
+    "open_issues_count": 0,
+    "commit": "a1c5df38855094dbd9b09e1d2f576cb4644942d3",
+    "commit_message": "Add molecule test (#1)\n\n* Adds yamllint for local and molecule\r\n\r\n* Adds molecule and use in travis CI\r\n\r\n* Test multiple distro in single travis run\r\n\r\n* Relicence to MIT\r\n\r\n* Adds build badge\r\n\r\n* Revise supported ansible versions",
+    "commit_url": "https://api.github.com/repos/00willo/ansible-role_sublimetext/git/commits/a1c5df38855094dbd9b09e1d2f576cb4644942d3",
+    "issue_tracker_url": "https://github.com/00willo/ansible-role_sublimetext/issues"
+}

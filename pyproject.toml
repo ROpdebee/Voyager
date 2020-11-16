@@ -1,0 +1,42 @@
+[tool.poetry]
+name = "ansible_semver"
+version = "0.1.0"
+description = ""
+authors = ["Ruben Opdebeeck <ropdebee@vub.be>"]
+
+[tool.poetry.dependencies]
+python = "^3.8"
+requests = "^2.23.0"
+gitpython = "^3.1.2"
+attrs = "^19.3.0"
+cattrs = "^1.0.0"
+pendulum = "^2.1.0"
+click = "^7.1.2"
+tqdm = "^4.46.0"
+matplotlib = "^3.2.1"
+ansible = "^2.9.10"
+jinja2 = "^2.11.2"
+pyyaml = "^5.3.1"
+graphviz = "^0.14.1"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.4.1"
+pytest-cov = "^2.8.1"
+flake8 = {version = "^3.8.0-alpha.2", allows-prereleases = true}
+setuptools = "^46.1.3"
+pytest-datadir = "^1.3.1"
+betamax = "^0.8.1"
+pytest-flake8 = {git = "https://github.com/bobhy/pytest-flake8.git", rev = "use_flake8_config"}
+pytest-mypy = "^0.6.2"
+coverage = "^5.1"
+pytest-sugar = "^0.9.3"
+mypy = "^0.770"
+data-science-types = "^0.2.10"
+wemake-python-styleguide = "^0.14.1"
+flake8-pytest-style = "^1.3.0"
+flake8-annotations = "^2.4.1"
+flake8-logging-format = "^0.6.0"
+
+[build-system]
+requires = ["poetry>=0.12"]
+build-backend = "poetry.masonry.api"
