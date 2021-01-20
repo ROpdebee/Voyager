@@ -2,7 +2,6 @@
 
 from . import (
     analyze as analyze,
-    clone as clone,
-    discover as discover,
+    collect as collect,
     extract as extract
 )

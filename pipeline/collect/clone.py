@@ -10,7 +10,7 @@ from config import CloneConfig
 from models.galaxy import GalaxyRole
 from models.git import GitRepoPath
 from pipeline.base import ResultMap, Stage
-from pipeline.discover import Discover
+from pipeline.collect.discover import Discover
 
 
 class CloneException(Exception):

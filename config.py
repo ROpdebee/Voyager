@@ -14,8 +14,6 @@ class MainConfig(Config):
             'Output a report after a task has completed.', default=False)
     progress: Option[bool] = Option(
             'Print the progress of a task.', default=False)
-    cache: Option[bool] = Option(
-            'Enable or disable the use of the cache', default=True)
     dataset: Option[str] = Option(
             'The name of the dataset to create/use', final=True)
     output: Option[Path] = Option(
@@ -33,7 +31,7 @@ class MainConfig(Config):
         return self.output / self.dataset
 
 
-class DiscoverConfig(MainConfig):
+class RoleDiscoveryConfig(MainConfig):
     """Configuration for discovery."""
 
     count: Option[int] = Option('Number of roles to discover')

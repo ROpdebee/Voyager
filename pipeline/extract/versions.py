@@ -10,7 +10,7 @@ from config import ExtractVersionConfig
 from models.git import GitRepoPath
 from models.version import Version, RepoVersions
 from pipeline.base import ResultMap, Stage
-from pipeline.clone import Clone
+from pipeline.collect.clone import Clone
 
 
 class ExtractVersions(

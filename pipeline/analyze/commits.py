@@ -18,8 +18,8 @@ from models.git import GitRepoPath
 from models.version import AnalyzedRepoVersions, RepoVersionDiffs, VersionDiff
 from pipeline.analyze.versions import AnalyzeVersions
 from pipeline.base import ResultMap, Stage
-from pipeline.clone import Clone
-from pipeline.discover import Discover
+from pipeline.collect.clone import Clone
+from pipeline.collect.discover import Discover
 from util import plot, write_csv
 
 

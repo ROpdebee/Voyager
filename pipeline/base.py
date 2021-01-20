@@ -9,9 +9,11 @@ import json
 import operator
 
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import cattr
 import click
+import yaml
 
 from config import MainConfig
 from models import Model
@@ -21,15 +23,25 @@ from util import capitalized_to_underscored
 IDType = str
 
 
-class WithID(Protocol):
+class WithIDAndDump(Protocol):
     """Protocol for data with an ID."""
+
     @property
     def id(self) -> str:
         """Get the ID for the data."""
         ...
 
+    def dump(self, dirpath: Path) -> Path:
+        """Dump the object to disk and return its path."""
+        ...
 
-ResultType = TypeVar('ResultType', bound=WithID)
+    @classmethod
+    def load(cls, id: str, file_path: Path) -> object:
+        """Load an object from disk."""
+        ...
+
+
+ResultType = TypeVar('ResultType', bound=WithIDAndDump)
 ConfigType = TypeVar('ConfigType', bound=MainConfig)
 
 _converter = cattr.Converter()
@@ -49,7 +61,9 @@ STAGES: Dict[Type['Stage[Any, Any]'], Type[Any]] = {}
 class ResultMap(Mapping[str, ResultType]):
     """Result container.
 
-    Contains a mapping from result IDs to """
+    Contains a mapping from result IDs to the actual results.
+    """
+
     _storage: Mapping[IDType, ResultType]
 
     def __init__(
@@ -90,20 +104,6 @@ class ResultMap(Mapping[str, ResultType]):
         """Get an item from the mapping."""
         return self._storage[key]
 
-    def unstructure(self) -> Any:
-        return _converter.unstructure(self._storage)
-
-    @classmethod
-    def structure(cls, obj: object, type_: type) -> 'ResultMap[ResultType]':
-        data_type = get_args(type_)[0]
-        return cls(_converter.structure(
-                obj, Mapping[str, data_type]))  # type: ignore[misc,valid-type]
-
-
-_converter.register_unstructure_hook(
-        ResultMap, operator.methodcaller('unstructure'))
-_converter.register_structure_hook(ResultMap[ResultType], ResultMap.structure)
-
 
 def _extract_type_args_from_subclass(
         klass: Type['Stage[ResultType, ConfigType]']
@@ -127,6 +127,7 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
     """Base class for pipeline stages.
 
     Override `run` and `report_results` for custom logic.
+    Override `dump` to dump the data to the dataset.
     Call `process` as a client.
     """
 
@@ -150,8 +151,8 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
 
     @property
     @abstractmethod
-    def cache_file_name(self) -> str:
-        """Get the file name for the cache file."""
+    def dataset_dir_name(self) -> str:
+        """Get the directory name for the stage in the dataset."""
         raise NotImplementedError()
 
     @final
@@ -162,24 +163,25 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
         """Process the stage.
 
         Report results if the report flag is set in the config.
-        If the stage was processed previously and its results are cached,
-        return the cached results.
+        If the stage was processed previously and its results are already in
+        the dataset, return it from there.
         """
         stage = cls(config)
         from_cache = False
 
-        # Always try to load from cache if it's a dependency
-        if (config.cache and not config.force) or dependency:
+        # Always try to load from the dataset if it's a dependency
+        if not config.force or dependency:
             try:
-                results = stage.load_cache_results()
+                results = stage.load_from_dataset()
                 from_cache = True
             except CacheMiss:
                 results = stage._run_with_input()
         else:
             results = stage._run_with_input()
 
-        if config.cache and not from_cache:
-            stage.store_cache_results(results)
+        # No use in storing it if it's loaded from the dataset.
+        if not from_cache:
+            stage.store_in_dataset(results)
 
         if config.report and not (dependency and from_cache):
             stage.report_results(results)
@@ -189,7 +191,6 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
     @final
     def _run_with_input(self) -> ResultMap[ResultType]:
         """Run the stage, first getting the result of the requirement."""
-
         # Try getting the results of the requirement stage. Will only work
         # if the results are cached, or when the required configuration is
         # known
@@ -213,37 +214,45 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
                 ResultMap[ResultType],
                 self.run(**input_data))  # type: ignore[attr-defined]
 
-    @final
-    def store_cache_results(self, results: ResultMap[ResultType]) -> None:
-        """Cache the results of a run."""
-        cache_path = self.config.output_directory / self.cache_file_name
-        try:
-            with cache_path.open('w') as f_cache:
-                json.dump(
-                        results.unstructure(), f_cache,
-                        sort_keys=True, indent=4)
-        except OSError:  # pragma: no cover
-            pass
+    def store_in_dataset(self, results: ResultMap[ResultType]) -> None:
+        """Store the results of a stage in the dataset."""
+        dataset_dir_path = self.config.output_directory / self.dataset_dir_name
+        dataset_dir_path.mkdir(exist_ok=True, parents=True)
+        index: Dict[str, str] = {}
+        for result_id in results:
+            # Don't catch OSErrors, need to be able to save the data.
+            cache_file_path = results[result_id].dump(dataset_dir_path)
+            index[result_id] = str(
+                    cache_file_path.relative_to(dataset_dir_path))
 
-    @final
-    def load_cache_results(self) -> ResultMap[ResultType]:
-        """Load the results of a previous run from the cache.
+        # Write the index
+        with (dataset_dir_path / 'index.yaml').open('wt') as f_index:
+            yaml.dump(index, f_index, sort_keys=True)
 
-        Raises `CacheMiss` when not found in the cache.
+    def load_from_dataset(self) -> ResultMap[ResultType]:
+        """Load the results of a previous run from the dataset.
+
+        Raises `CacheMiss` when not found in the dataset.
         """
-        cache_path = self.config.output_directory / self.cache_file_name
+        dataset_dir_path = self.config.output_directory / self.dataset_dir_name
         target_type: Type[ResultType] = self._extract_result_type()
         result_type = Mapping[str, target_type]  # type: ignore[valid-type]
+
+        # Open the index
         try:
-            with cache_path.open('r') as f_cache:
-                # Convert to Dict, then to ResultMap, since cattr tries to take
-                # both key and value type args from ResultMap generics
-                # otherwise
-                return ResultMap(_converter.structure(
-                        json.load(f_cache), result_type))  # type: ignore[misc]
+            with (dataset_dir_path / 'index.yaml').open('rt') as f_index:
+                index = yaml.full_load(f_index)
+
+            loaded: Dict[str, target_type] = {}  # type: ignore[valid-type]
+            for result_id, result_path in index.items():
+                result_full_path = dataset_dir_path / Path(result_path)
+                loaded[result_id] = target_type.load(
+                        result_id, result_full_path)
+
+            return ResultMap(loaded)
         except OSError:
             raise CacheMiss()
-        except json.JSONDecodeError as exc:
+        except yaml.YAMLError as exc:
             print(exc)
             raise CacheMiss()
 

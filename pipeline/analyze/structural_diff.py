@@ -32,7 +32,7 @@ from models.structural.role import Role
 from models.version import RepoVersions, Version
 from pipeline.extract.versions import ExtractVersions
 from pipeline.base import ResultMap, Stage
-from pipeline.clone import Clone
+from pipeline.collect.clone import Clone
 from util import write_csv
 
 

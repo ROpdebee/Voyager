@@ -1,6 +1,12 @@
 """Data models for the Ansible Galaxy API."""
+from __future__ import annotations
+
+from typing import Any, Dict
+
 import abc
+import json
 from collections.abc import MutableMapping
+from pathlib import Path
 
 import attr
 import pendulum
@@ -8,14 +14,34 @@ import pendulum
 from models.base import Model
 
 
-class GalaxyModel(Model, abc.ABC):
-    """Base class for Galaxy models."""
+class GalaxyAPIPage(Model):
+    """Container for a page returned by the Galaxy API."""
 
-    pass
+    def __init__(self, page_num: int, page_content: str) -> None:
+        self.page_num = page_num
+        self.page_content: Dict[str, Any] = json.loads(page_content)
+
+    @property
+    def id(self) -> str:
+        return str(self.page_num)
+
+    @property
+    def response(self) -> Dict[str, object]:
+        return self.page_content
+
+    def dump(self, directory: Path) -> Path:
+        fpath = directory / f'page_{self.page_num}.json'
+        fpath.write_text(json.dumps(
+                self.page_content, sort_keys=True, indent=2))
+        return fpath
+
+    @classmethod
+    def load(cls, page_num: str, path: Path) -> GalaxyAPIPage:
+        return cls(int(page_num), path.read_text())
 
 
 @attr.s(auto_attribs=True)
-class GalaxyRole(GalaxyModel):
+class GalaxyRole(Model):
     """Model for roles in the Galaxy API.
 
     :ivar id: The ID of the role.

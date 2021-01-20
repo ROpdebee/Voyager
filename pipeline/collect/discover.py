@@ -3,7 +3,7 @@ from typing import Set
 
 from tqdm import tqdm
 
-from config import DiscoverConfig
+from config import RoleDiscoveryConfig as DiscoverConfig
 from models.galaxy import GalaxyRole
 from pipeline.base import ResultMap, Stage
 from services.galaxy import GalaxyAPI
