@@ -18,7 +18,7 @@ def main(config: MainConfig) -> None:
         config.output_directory.mkdir(parents=True, exist_ok=True)
         print(f'Setting output directory to {config.output_directory}')
         # Check if migrations are necessary and perform them
-        perform_migrations(config.output_directory)
+        # perform_migrations(config.output_directory)
     except BadParameter:
         pass
 

@@ -1,18 +1,22 @@
 """Ansible Galaxy API service."""
-from typing import Iterator, Mapping, Optional, Type, TypeVar
+from typing import Iterator, Mapping, Optional, Sequence, Type, TypeVar
 
 import enum
 import itertools
+import json
 import urllib.parse
+from json.decoder import JSONDecodeError
+from time import sleep
 
 import requests
 
-from models.galaxy import GalaxyAPIPage
+from models.galaxy import GalaxyImportEventAPIResponse, GalaxySearchAPIPage
 from util import ValueMap
 
 
 class _APIURLs(ValueMap):
     role_search = 'https://galaxy.ansible.com/api/v1/search/roles/'
+    import_events = 'https://galaxy.ansible.com/api/v1/roles/{role_id}/imports/'
 
 
 class OrderField(enum.Enum):
@@ -70,7 +74,7 @@ class GalaxyAPI:
 
     def _paginate(
             self, api_url: str, **params: Optional[str]
-    ) -> Iterator[GalaxyAPIPage]:
+    ) -> Iterator[str]:
         """Paginate through the results of an Ansible Galaxy API query.
 
         Returns an iterable where new pages are lazily loaded. Requires the
@@ -79,12 +83,18 @@ class GalaxyAPI:
         next_link: Optional[str]
         next_link = api_url + '?' + urllib.parse.urlencode(
                 _remove_unused_params(params))
-        page_num = 0
+        page_num = 1
 
         while next_link is not None:  # pragma: no branch
-            page_num += 1
             result = self._session.get(next_link)
-            json = result.json()
+            try:
+                json = result.json()
+            except JSONDecodeError:
+                # Ugly workaround for potential rate limiting. Sleep and retry
+                # with the same link
+                print('Rate limit?')
+                sleep(5)
+                continue
             # TODO(ROpdebee): We know the number of results here, but since
             #                 pages are loaded lazily, we return a generator.
             #                 Should we maybe notify of the count as soon as we
@@ -95,7 +105,9 @@ class GalaxyAPI:
                 # End of results
                 next_link = None
 
-            yield GalaxyAPIPage(page_num, result.text)
+            yield result.text
+            return
+            page_num += 1
 
     def search_roles(
             self,
@@ -103,7 +115,7 @@ class GalaxyAPI:
             order: OrderDirection = OrderDirection.DESCENDING,
             deprecated: Optional[bool] = False,
             page_size: int = 500
-    ) -> Iterator[GalaxyAPIPage]:
+    ) -> Iterator[GalaxySearchAPIPage]:
         """Search roles using the Galaxy API.
 
         :param order_by: Field on which to order the results, download rank
@@ -111,8 +123,28 @@ class GalaxyAPI:
         :param order: Return results in ascending or descending order.
         :param deprecated: Whether to include deprecated roles or not.
         """
-        return self._paginate(
+        page_it = self._paginate(
                 _APIURLs.role_search,
                 deprecated=_convert_bool(deprecated),
                 order_by=_create_order_param(order_by, order),
                 page_size=str(page_size))
+        yield from (
+                GalaxySearchAPIPage(page_num + 1, page)
+                for page_num, page in enumerate(page_it))
+
+    def load_import_events(
+            self, role_ids: Sequence[int]
+    ) -> Iterator[GalaxyImportEventAPIResponse]:
+        yield from (
+                self.load_import_events_for_role(role_id)
+                for role_id in role_ids)
+
+    def load_import_events_for_role(
+            self, role_id: int
+    ) -> GalaxyImportEventAPIResponse:
+        page_it = self._paginate(
+                _APIURLs.import_events.format(role_id=role_id),
+                page_size='500')
+        return GalaxyImportEventAPIResponse(
+                role_id, [json.loads(page) for page in page_it])
+
