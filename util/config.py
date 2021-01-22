@@ -40,7 +40,8 @@ class Option(Generic[_OptionType]):
             default_factory: Optional[DefaultFactoryType[_OptionType]] = None,
             click_type: Optional[ClickType] = None,
             converter: Optional[ConverterFunction[_OptionType]] = None,
-            final: bool = False
+            final: bool = False,
+            required: bool = True,
     ) -> None:
         """Initialize with a help text.
 
@@ -70,6 +71,7 @@ class Option(Generic[_OptionType]):
         self.final = final
         self.click_type = click_type
         self.converter = converter
+        self.required = required
 
         self._value_map = WeakKeyDictionary()
 
@@ -95,13 +97,19 @@ class Option(Generic[_OptionType]):
 
         if obj not in self._value_map:
             if obj._parent_cfg is not None:
-                return self.__get__(obj._parent_cfg, obj._parent_cfg.__class__)
+                try:
+                    return self.__get__(
+                            obj._parent_cfg, obj._parent_cfg.__class__)
+                except TypeError:
+                    pass
             if self.default is not None:
                 return self.default
             if self.default_factory is not None:
                 default = self.default_factory()
                 self._value_map[obj] = default
                 return default
+            if not self.required:
+                return None  # type: ignore[return-value]
 
             raise click.BadParameter(
                     'This option is required.',

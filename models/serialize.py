@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 import cattr
 import pendulum
 
-CONVERTER = cattr.Converter()
+CONVERTER = cattr.GenConverter()  # type: ignore[attr-defined]
 
 # Customize converter for paths
 CONVERTER.register_structure_hook(Path, lambda p, _: Path(p))
@@ -25,3 +25,4 @@ CONVERTER.register_structure_hook(
         lambda ts, _: cast(pendulum.DateTime, pendulum.parse(ts)))
 CONVERTER.register_unstructure_hook(
         pendulum.DateTime, operator.methodcaller('to_rfc3339_string'))
+

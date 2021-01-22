@@ -7,7 +7,7 @@ import pipeline.base
 
 from config import MainConfig
 from util.cli import register_command, register_subcommand
-from migrations import perform_migrations
+# from migrations import perform_migrations
 
 
 @register_command

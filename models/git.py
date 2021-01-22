@@ -4,19 +4,29 @@ from pathlib import Path
 import attr
 
 from models.base import Model
+from models.role_metadata import Repository, XrefID
 
 
 @attr.s(auto_attribs=True, frozen=True)
-class GitRepoPath(Model):
+class GitRepo(Model):
     """Model for a local path containing a Git repository."""
     owner: str
     name: str
-    role_id: str
+    repo_id: XrefID
     path: Path
 
     @property
     def id(self) -> str:
-        return self.role_id
+        return str(self.repo_id)
+
+    def dump(self, directory: Path) -> Path:
+        return self.path
+
+    @classmethod
+    def load(cls, id: str, path: Path) -> 'GitRepo':
+        repo_id = XrefID.load(id)
+        owner, name = path.parts[-2:]
+        return cls(owner=owner, name=name, repo_id=repo_id, path=path)
 
 
 @attr.s(auto_attribs=True, frozen=True)

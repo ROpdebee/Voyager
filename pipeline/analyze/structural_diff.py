@@ -25,7 +25,7 @@ from ansible.errors import AnsibleError
 from tqdm import tqdm
 
 from config import DiffConfig
-from models.git import GitRepoPath
+from models.git import GitRepo
 from models.structural.diff import Diff, get_diff_category_leafs
 from models.structural.metrics import RepoDiffMetrics, StructuralDiffMetrics
 from models.structural.role import Role
@@ -55,16 +55,16 @@ class StructuralDiff(
 
     def run(
             self, extract_versions: ResultMap[RepoVersions],
-            clone: ResultMap[GitRepoPath]
+            clone: ResultMap[GitRepo]
     ) -> ResultMap[RepoDiffMetrics]:
         results = []
-        repos_to_bumps: Dict[GitRepoPath, List[Tuple[Version, Version]]]
+        repos_to_bumps: Dict[GitRepo, List[Tuple[Version, Version]]]
         repos_to_bumps = defaultdict(list)
         for repo_id, repo_versions in extract_versions.items():
             repos_to_bumps[clone[repo_id]].extend(
                     zip(repo_versions.versions, repo_versions.versions[1:]))
 
-        repo_list: Iterable[Tuple[GitRepoPath, List[Tuple[Version, Version]]]]
+        repo_list: Iterable[Tuple[GitRepo, List[Tuple[Version, Version]]]]
         bump_pbar: Optional[tqdm]
         repo_list = [(r, b) for r, b in repos_to_bumps.items() if b]
         if self.config.progress:
@@ -86,7 +86,7 @@ class StructuralDiff(
         return ResultMap(results)
 
     def diff_repo(
-            self, repo_path: GitRepoPath,
+            self, repo_path: GitRepo,
             bumps: Sequence[Tuple[Version, Version]],
             bump_pbar: Optional[tqdm]
     ) -> RepoDiffMetrics:

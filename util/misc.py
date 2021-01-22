@@ -45,7 +45,7 @@ def capitalized_to_dashed(name: str) -> str:
 
 
 def capitalized_to_underscored(name: str) -> str:
-    """Convert a capitalized name to dashed."""
+    """Convert a capitalized name to underscored."""
     return capitalized_to_sep(name, '_').lower()
 
 

@@ -31,10 +31,10 @@ class MainConfig(Config):
         return self.output / self.dataset
 
 
-class RoleDiscoveryConfig(MainConfig):
-    """Configuration for discovery."""
+class ExtractRoleMetadataConfig(MainConfig):
+    """Configuration for role metadata extraction."""
 
-    count: Option[int] = Option('Number of roles to discover')
+    count: Option[int] = Option('Top number of roles to keep', required=False)
 
 
 class CloneConfig(MainConfig):

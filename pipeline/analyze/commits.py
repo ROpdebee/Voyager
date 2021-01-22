@@ -13,19 +13,19 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from config import MainConfig
-from models.galaxy import GalaxyRole
-from models.git import GitRepoPath
+from models.role_metadata import GalaxyMetadata as RoleMetadata
+from models.git import GitRepo
 from models.version import AnalyzedRepoVersions, RepoVersionDiffs, VersionDiff
 from pipeline.analyze.versions import AnalyzeVersions
 from pipeline.base import ResultMap, Stage
 from pipeline.collect.clone import Clone
-from pipeline.collect.discover import Discover
+from pipeline.extract.extract_role_metadata import ExtractRoleMetadata
 from util import plot, write_csv
 
 
 class AnalyzeCommits(
         Stage[RepoVersionDiffs, MainConfig],
-        requires=(AnalyzeVersions, Clone, Discover)
+        requires=(AnalyzeVersions, Clone, ExtractRoleMetadata)
 ):
     """Analyse diffs between extracted versions."""
 
@@ -35,8 +35,8 @@ class AnalyzeCommits(
 
     def run(
             self, analyze_versions: ResultMap[AnalyzedRepoVersions],
-            clone: ResultMap[GitRepoPath],
-            discover: ResultMap[GalaxyRole]
+            clone: ResultMap[GitRepo],
+            extract_role_metadata: ResultMap[RoleMetadata]
     ) -> ResultMap[RepoVersionDiffs]:
         results = []
         repos_to_versions: Iterable[AnalyzedRepoVersions] = (
@@ -108,8 +108,8 @@ class AnalyzeCommits(
     def export_to_csv(
             self,
             results: Collection[RepoVersionDiffs],
-            repos: ResultMap[GitRepoPath],
-            roles: ResultMap[GalaxyRole]
+            repos: ResultMap[GitRepo],
+            roles: ResultMap[RoleMetadata]
     ) -> None:
         header_files = (
                 'role id', 'role name', 'owner', 'repo', 'touched file',

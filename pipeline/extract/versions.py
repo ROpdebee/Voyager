@@ -7,7 +7,7 @@ import pendulum
 from tqdm import tqdm
 
 from config import ExtractVersionConfig
-from models.git import GitRepoPath
+from models.git import GitRepo
 from models.version import Version, RepoVersions
 from pipeline.base import ResultMap, Stage
 from pipeline.collect.clone import Clone
@@ -19,14 +19,14 @@ class ExtractVersions(
 ):
     """Extract the versions from the git repositories."""
 
-    def run(self, clone: ResultMap[GitRepoPath]) -> ResultMap[RepoVersions]:
-        repos: Iterable[GitRepoPath] = clone.values()
+    def run(self, clone: ResultMap[GitRepo]) -> ResultMap[RepoVersions]:
+        repos: Iterable[GitRepo] = clone.values()
         if self.config.progress:
             repos = tqdm(repos)
 
         return ResultMap(map(self.extract_versions, repos))
 
-    def extract_versions(self, repo_path: GitRepoPath) -> RepoVersions:
+    def extract_versions(self, repo_path: GitRepo) -> RepoVersions:
         repo = git.Repo(self.config.output_directory / repo_path.path)
         versions: List[Version] = []
         for tagref in repo.tags:

@@ -1,61 +1,32 @@
 """Ansible Galaxy API service."""
-from typing import Iterator, Mapping, Optional, Sequence, Type, TypeVar
+from typing import Callable, Dict, Iterator, Mapping, Optional, Sequence, Type, TypeVar
 
 import enum
 import itertools
 import json
+import re
 import urllib.parse
 from json.decoder import JSONDecodeError
+from pathlib import Path
 from time import sleep
 
 import requests
+import tqdm
+from requests.exceptions import Timeout
 
-from models.galaxy import GalaxyImportEventAPIResponse, GalaxySearchAPIPage
-from util import ValueMap
-
-
-class _APIURLs(ValueMap):
-    role_search = 'https://galaxy.ansible.com/api/v1/search/roles/'
-    import_events = 'https://galaxy.ansible.com/api/v1/roles/{role_id}/imports/'
+from models.galaxy import GalaxyAPIPage, GalaxyImportEventAPIResponse
 
 
-class OrderField(enum.Enum):
-    """Field on which can be ordered."""
-
-
-@enum.unique
-class RoleOrder(OrderField):
-    """Field by which to order the roles."""
-
-    DOWNLOAD_RANK = 'download_rank'
-    CREATED = 'created'
-
-
-@enum.unique
-class OrderDirection(enum.Enum):
-    """Direction in which to order."""
-
-    ASCENDING = 1
-    DESCENDING = 2
-
-
-def _create_order_param(field: OrderField, direction: OrderDirection) -> str:
-    direction_modifier = '-' if direction is OrderDirection.DESCENDING else ''
-    return f'{direction_modifier}{field.value}'
+def _log(text: str) -> None:
+    # Not thread safe, but doesn't really matter that much
+    with Path('galaxy.log').open('at') as flog:
+        flog.write(text + '\n')
 
 
 def _remove_unused_params(
         params: Mapping[str, Optional[str]]
 ) -> Mapping[str, str]:
     return {k: v for k, v in params.items() if v is not None}
-
-
-def _convert_bool(b: Optional[bool]) -> Optional[str]:
-    """Convert bool to a string that Galaxy understands."""
-    if b is None:
-        return None
-
-    return 'true' if b else 'false'
 
 
 class GalaxyAPI:
@@ -73,7 +44,8 @@ class GalaxyAPI:
         self._session = session
 
     def _paginate(
-            self, api_url: str, **params: Optional[str]
+            self, api_url: str,
+            **params: Optional[str]
     ) -> Iterator[str]:
         """Paginate through the results of an Ansible Galaxy API query.
 
@@ -84,21 +56,34 @@ class GalaxyAPI:
         next_link = api_url + '?' + urllib.parse.urlencode(
                 _remove_unused_params(params))
         page_num = 1
+        _log(f'{api_url}: Start')
 
         while next_link is not None:  # pragma: no branch
-            result = self._session.get(next_link)
+            try:
+                result = self._session.get(next_link, timeout=30)
+            except Timeout:
+                # Try again with same link.
+                _log(f'{next_link}: Timed out')
+                continue
             try:
                 json = result.json()
             except JSONDecodeError:
                 # Ugly workaround for potential rate limiting. Sleep and retry
                 # with the same link
-                print('Rate limit?')
-                sleep(5)
-                continue
-            # TODO(ROpdebee): We know the number of results here, but since
-            #                 pages are loaded lazily, we return a generator.
-            #                 Should we maybe notify of the count as soon as we
-            #                 know it?
+                if result.status_code != 500:
+                    _log(f'{next_link}: Rate limit?')
+                    sleep(5)
+                    continue
+                else:
+                    _log(f'{next_link}: 500 Server Error')
+                    if 'page=' in next_link:
+                        next_link = re.sub(
+                                r'page=\d+', f'page={page_num + 1}', next_link)
+                    else:
+                        next_link = next_link + f'&page={page_num + 1}'
+                    page_num += 1
+                    continue
+
             if (next_path := json.get('next_link', None)) is not None:
                 next_link = 'https://galaxy.ansible.com' + next_path
             else:
@@ -106,45 +91,38 @@ class GalaxyAPI:
                 next_link = None
 
             yield result.text
-            return
             page_num += 1
 
-    def search_roles(
-            self,
-            order_by: RoleOrder = RoleOrder.DOWNLOAD_RANK,
-            order: OrderDirection = OrderDirection.DESCENDING,
-            deprecated: Optional[bool] = False,
-            page_size: int = 500
-    ) -> Iterator[GalaxySearchAPIPage]:
-        """Search roles using the Galaxy API.
+        _log(f'{api_url}: Done')
 
-        :param order_by: Field on which to order the results, download rank
-                         by default.
-        :param order: Return results in ascending or descending order.
-        :param deprecated: Whether to include deprecated roles or not.
-        """
+    def load_pages(
+            self, page_name: str, page_url: str,
+            page_size: int = 500,
+    ) -> Iterator[GalaxyAPIPage]:
+        """Load API content pages."""
         page_it = self._paginate(
-                _APIURLs.role_search,
-                deprecated=_convert_bool(deprecated),
-                order_by=_create_order_param(order_by, order),
-                page_size=str(page_size))
+                page_url, page_size=str(page_size))
         yield from (
-                GalaxySearchAPIPage(page_num + 1, page)
+                GalaxyAPIPage(page_name, page_num + 1, page)
                 for page_num, page in enumerate(page_it))
 
-    def load_import_events(
-            self, role_ids: Sequence[int]
-    ) -> Iterator[GalaxyImportEventAPIResponse]:
-        yield from (
-                self.load_import_events_for_role(role_id)
-                for role_id in role_ids)
-
-    def load_import_events_for_role(
-            self, role_id: int
-    ) -> GalaxyImportEventAPIResponse:
-        page_it = self._paginate(
-                _APIURLs.import_events.format(role_id=role_id),
-                page_size='500')
-        return GalaxyImportEventAPIResponse(
-                role_id, [json.loads(page) for page in page_it])
-
+    def load_role(self, role_id: int) -> Optional[Dict[str, object]]:
+        try:
+            result = self._session.get(
+                    f'https://galaxy.ansible.com/api/v1/roles/{role_id}/')
+            if result.status_code == 403:
+                # Forbidden
+                return None
+            return result.json()  # type: ignore[no-any-return]
+        except Timeout:
+            # Try again with same link.
+            _log(f'{role_id}: Timed out')
+            return self.load_role(role_id)
+        except JSONDecodeError:
+            # Try again with same link.
+            if result.status_code != 500:
+                sleep(5)
+                _log(f'{role_id}: Rate limit?')
+                return self.load_role(role_id)
+            else:
+                raise

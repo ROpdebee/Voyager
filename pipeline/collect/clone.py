@@ -1,5 +1,7 @@
 """Clone stage."""
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
+
+import re
 
 from pathlib import Path
 
@@ -7,10 +9,10 @@ import git
 from tqdm import tqdm
 
 from config import CloneConfig
-from models.galaxy import GalaxyRole
-from models.git import GitRepoPath
+from models.role_metadata import GalaxyMetadata, Repository, XrefID
+from models.git import GitRepo
 from pipeline.base import ResultMap, Stage
-from pipeline.collect.discover import Discover
+from pipeline.extract.extract_role_metadata import ExtractRoleMetadata
 
 
 class CloneException(Exception):
@@ -74,48 +76,56 @@ class CloneProgress(git.RemoteProgress):
         self._pbar.update(n=(cur_count - self._pbar.n))
 
 
-class Clone(Stage[GitRepoPath, CloneConfig], requires=Discover):
+class Clone(Stage[GitRepo, CloneConfig], requires=ExtractRoleMetadata):
     """Clone the repositories for discovered Ansible roles."""
 
-    cache_file_name: str = 'repo_paths.json'
+    dataset_dir_name = 'Repositories'
 
     @property
     def repo_path(self) -> Path:
         """Get the base path to the cloned repositories."""
-        return self.config.output_directory / 'repos'
+        return self.config.output_directory / self.dataset_dir_name
 
-    def run(self, discover: ResultMap[GalaxyRole]) -> ResultMap[GitRepoPath]:
+    def run(self, extract_role_metadata: ResultMap[GalaxyMetadata]) -> ResultMap[GitRepo]:
         """Run the stage: Clone the repositories."""
         repo_paths = set()
-        roles: Iterable[GalaxyRole] = discover.values()
+        repos: Iterable[Repository] = extract_role_metadata['dummy'].repositories.values()
         if self.config.progress:
-            roles = tqdm(roles, desc='Cloning repos')
+            repos = tqdm(repos, desc='Cloning repos')
 
-        for role in roles:
-            user, repo = role.github_user, role.github_repo
+        for repo in repos:
             try:
-                path = self.clone(user, repo)
+                user, repo_name = self._parse_info(repo)
+                path = self.clone(user, repo_name, repo)
             except CloneException as exc:  # pragma: no cover
-                tqdm.write(f'Failed to clone repository {user}/{repo}: {exc}')
+                tqdm.write(f'Failed to clone repository {repo.github_url}: {exc}')
                 continue
 
-            repo_paths.add(GitRepoPath(
-                    role.github_user, role.github_repo, role.id, path))
+            repo_paths.add(GitRepo(
+                    user, repo_name, XrefID(Repository, repo.entity_id), path))
         return ResultMap(repo_paths)
 
-    def report_results(self, results: ResultMap[GitRepoPath]) -> None:
+    def _parse_info(self, repo: Repository) -> Tuple[str, str]:
+        match = re.match(r'^https://github.com/([a-zA-Z0-9_\.\-]+)/([a-zA-Z0-9_\-\.]+)/?$', repo.github_url)
+        if not match:
+            raise CloneException(f'Invalid URL: {repo.github_url}')
+
+        return match.groups()  # type: ignore
+
+    def report_results(self, results: ResultMap[GitRepo]) -> None:
         """Report the results."""
         print('--- Repository Cloning ---')
         print(f'Cloned {len(results)} repositories into {self.repo_path}')
 
-    def clone(self, owner: str, name: str) -> Path:
+    def clone(self, user: str, repo_name: str, repo: Repository) -> Path:
         """Clone a given repository into the base repo path.
 
         Returns the path to the repo. The path is relative to main output
         directory, so it should be possible to reuse them across different
         installations.
         """
-        repo_path = self.repo_path / owner / name
+
+        repo_path = self.repo_path / user / repo_name
         if self.repo_path.resolve() not in repo_path.resolve().parents:
             # If owner or name starts with a forward slash, it might try to
             # clone into a different directory, which is a path traversal
@@ -141,8 +151,8 @@ class Clone(Stage[GitRepoPath, CloneConfig], requires=Discover):
             progress = CloneProgress()
 
         try:
-            repo = git.Repo.clone_from(
-                    url=_GH_REPO_URL_FMT.format(user=owner, repo=name),
+            clone_repo = git.Repo.clone_from(
+                    url=repo.github_url,
                     to_path=repo_path,
                     env={'GIT_TERMINAL_PROMPT': '0'},
                     progress=progress)
@@ -150,5 +160,5 @@ class Clone(Stage[GitRepoPath, CloneConfig], requires=Discover):
             raise CloneException(f'Unable to clone repo: {exc}') from exc
 
         # Close the cloned repository, we'll come back to it later
-        repo.close()
+        clone_repo.close()
         return repo_path.relative_to(self.config.output_directory)
