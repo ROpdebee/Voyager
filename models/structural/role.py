@@ -458,7 +458,11 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
 
     @staticmethod
     def _load_metadata_obj(role_path: Path, role: ansrole.Role) -> Tuple[ansrole.metadata.RoleMetadata, Optional[BrokenFile]]:
-        metadata_dict = role._load_role_yaml('meta')
+        try:
+            metadata_dict = role._load_role_yaml('meta')
+        except ans.errors.AnsibleError as e:
+            return (RoleMetadata(), (role_path / 'meta/main.yml', str(e)))
+
         if not metadata_dict:
             return (RoleMetadata(), None)
 

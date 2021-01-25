@@ -38,12 +38,12 @@ class ExtractStructuralModels(
             clone: ResultMap[GitRepo]
     ) -> ResultMap[MultiStructuralRoleModel]:
         """Run the stage."""
-        role_repos: List[Tuple[GitRepo, str, List[str]]] = self.get_role_repositories(extract_role_metadata, clone, extract_git_metadata)
+        role_repos = self.get_role_repositories(extract_role_metadata, clone, extract_git_metadata)
         num_revs = sum(len(revs) for (_, _, revs) in role_repos)
         if not self.config.commits:
             num_revs += len(role_repos)
 
-        task_list: Iterable[Tuple[GitRepo, str, List[str]]]
+        task_list: Iterable[Tuple[GitRepo, str, List[Tuple[str, str]]]]
         rev_pbar: Optional[tqdm]
         if self.config.progress:
             task_list = tqdm(
@@ -63,8 +63,8 @@ class ExtractStructuralModels(
             save_branch = git_repo_obj.active_branch
             role_models = []
             try:
-                for rev in revs:
-                    model = self.extract(git_repo_obj, role_name, rev, rev_pbar)
+                for sha1, rev in revs:
+                    model = self.extract(git_repo_obj, role_name, sha1, rev, rev_pbar)
                     if model is None:
                         failures += 1
                     else:
@@ -73,7 +73,7 @@ class ExtractStructuralModels(
                 # Also extract for the latest commit if we're extracting tags.
                 if not self.config.commits:
                     save_branch.checkout(force=True)
-                    model = self.extract(git_repo_obj, role_name, 'HEAD', rev_pbar)
+                    model = self.extract(git_repo_obj, role_name, 'HEAD', 'HEAD', rev_pbar)
                     if model is None:
                         failures += 1
                     else:
@@ -96,24 +96,21 @@ class ExtractStructuralModels(
         print(f'Extracted {num_all_roles} structural models for {len(results)} roles')
 
 
-    def extract(self, repo: git.Repo, role_name: str, rev: str, rev_pbar: Optional[tqdm]) -> Optional[StructuralRoleModel]:
+    def extract(self, repo: git.Repo, role_name: str, sha1: str, rev: str, rev_pbar: Optional[tqdm]) -> Optional[StructuralRoleModel]:
         try:
-            repo.git.checkout(rev, force=True)
+            repo.git.checkout(sha1, force=True)
             model = StructuralRoleModel.create(Path(repo.working_tree_dir), role_name, rev)
             if rev_pbar is not None:
                 rev_pbar.update(1)
             return model
-        except (AnsibleError, UnicodeEncodeError) as exc:
+        except Exception as exc:
             tqdm.write(f'Failed to load {repo} {rev}: {exc}')
             return None
-        except Exception:
-            tqdm.write(f'Failed to load {repo} {rev}')
-            raise
 
     def get_role_repositories(
             self, role_meta: ResultMap[GalaxyMetadata], clone: ResultMap[GitRepo],
             repo_meta: ResultMap[GitRepoMetadata]
-    ) -> List[Tuple[GitRepo, str, List[str]]]:
+    ) -> List[Tuple[GitRepo, str, List[Tuple[str, str]]]]:
         results = []
         for role in role_meta['dummy'].roles.values():
             repo_id = str(role.repository_id)
@@ -122,9 +119,9 @@ class ExtractStructuralModels(
             git_repo = clone[repo_id]
             git_repo_metadata = repo_meta[f'{git_repo.owner}/{git_repo.name}']
             if self.config.commits:
-                revs = [commit.sha1 for commit in git_repo_metadata.commits]
+                revs = [(commit.sha1, commit.sha1) for commit in git_repo_metadata.commits]
             else:
-                revs = [tag.name for tag in git_repo_metadata.tags]
+                revs = [(tag.commit_sha1, tag.name) for tag in git_repo_metadata.tags]
                 revs = self._keep_only_semver(revs)
 
             # If there's no commits, the repo is empty, so just skip it.
@@ -133,10 +130,10 @@ class ExtractStructuralModels(
 
         return results
 
-    def _keep_only_semver(self, tags: List[str]) -> List[str]:
-        semver_tags: List[Tuple[Version, str]] = []
-        for tag in tags:
+    def _keep_only_semver(self, tags: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        semver_tags: List[Tuple[Version, str, str]] = []
+        for sha1, tag in tags:
             if (v := Version.from_version_str(tag, pendulum.now(), '')).is_semantic_version:
-                semver_tags.append((v, tag))
+                semver_tags.append((v, sha1, tag))
         semver_tags.sort(key=lambda t: t[0])
-        return [tag for _, tag in semver_tags]
+        return [(sha1, tag) for _, sha1, tag in semver_tags]
