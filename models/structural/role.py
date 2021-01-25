@@ -9,6 +9,7 @@ from typing import (
         Mapping,
         Optional,
         Sequence,
+        IO,
         Tuple,
         Union,
         cast,
@@ -342,6 +343,18 @@ class RoleMetadata(ansrole.metadata.RoleMetadata):
         return roles
 
 
+class LogCapture:
+    def __init__(self) -> None:
+        self.logs: List[str] = []
+
+    def write(self, buf: str) -> int:
+        self.logs.append(buf)
+        return len(buf)
+
+    def flush(self) -> None:
+        pass
+
+
 @attr.s(auto_attribs=True)
 class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
     role_name: str
@@ -351,6 +364,7 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
     task_files: FileList[TaskFile]
     handler_files: FileList[HandlerFile]
     broken_files: FileList[Tuple[str, str]]
+    logs: List[str]  # Output from Ansible that was caught
 
     def gv_visit(self, g: SMGraph) -> None:
         g.add_node(self, label=self.role_name)
@@ -374,8 +388,6 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
         dl = ans.parsing.dataloader.DataLoader()
         var_mgr = ans.vars.manager.VariableManager(
                 loader=dl, inventory=ansinvmgr.InventoryManager(dl))
-        # Shut up the deprecation warnings, it clutters the output
-        ans.constants.DEPRECATION_WARNINGS = False
         role_def = ansrinc.RoleInclude.load(
                 str(role_path), dummy_play,
                 variable_manager=var_mgr)
@@ -462,35 +474,37 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
     @classmethod
     def load_from_ans_obj(cls, role_path: Path) -> Role:
         role_path = role_path.resolve()
-        role = cls._load_role(role_path)
-        # Load the metadata
-        meta_obj, broken_meta = cls._load_metadata_obj(role_path, role)
-        meta = MetaFile.from_ans_object('meta/main.yml', meta_obj)
-        broken_meta_files = []
-        if broken_meta is not None:
-            broken_meta_files.append(broken_meta)
+        log_capture = LogCapture()
+        with redirect_stdout(log_capture), redirect_stderr(log_capture):  # type: ignore[arg-type]
+            role = cls._load_role(role_path)
+            # Load the metadata
+            meta_obj, broken_meta = cls._load_metadata_obj(role_path, role)
+            meta = MetaFile.from_ans_object('meta/main.yml', meta_obj)
+            broken_meta_files = []
+            if broken_meta is not None:
+                broken_meta_files.append(broken_meta)
 
-        def obj_fact_factory(
-                obj_fact: Callable[[str, mixins.SourceType], mixins.FileType]
-        ) -> Callable[[Path, mixins.SourceType], mixins.FileType]:
-            return lambda p, o: obj_fact(str(p.relative_to(role_path)), o)
+            def obj_fact_factory(
+                    obj_fact: Callable[[str, mixins.SourceType], mixins.FileType]
+            ) -> Callable[[Path, mixins.SourceType], mixins.FileType]:
+                return lambda p, o: obj_fact(str(p.relative_to(role_path)), o)
 
-        var_loader = partial(cls._load_vars, r=role)
-        task_loader = partial(cls._load_tasks, r=role)
-        handler_loader = partial(cls._load_tasks, r=role, handlers=True)
+            var_loader = partial(cls._load_vars, r=role)
+            task_loader = partial(cls._load_tasks, r=role)
+            handler_loader = partial(cls._load_tasks, r=role, handlers=True)
 
-        dfs, bdfs = cls._load_files(
-                role_path / 'defaults',
-                obj_fact_factory(DefaultVarFile.from_ans_object), var_loader)
-        cfs, bcfs = cls._load_files(
-                role_path / 'vars',
-                obj_fact_factory(RoleVarFile.from_ans_object), var_loader)
-        tfs, btfs = cls._load_files(
-                role_path / 'tasks',
-                obj_fact_factory(TaskFile.from_ans_object), task_loader)
-        hfs, bhfs = cls._load_files(
-                role_path / 'handlers',
-                obj_fact_factory(HandlerFile.from_ans_object), handler_loader)
+            dfs, bdfs = cls._load_files(
+                    role_path / 'defaults',
+                    obj_fact_factory(DefaultVarFile.from_ans_object), var_loader)
+            cfs, bcfs = cls._load_files(
+                    role_path / 'vars',
+                    obj_fact_factory(RoleVarFile.from_ans_object), var_loader)
+            tfs, btfs = cls._load_files(
+                    role_path / 'tasks',
+                    obj_fact_factory(TaskFile.from_ans_object), task_loader)
+            hfs, bhfs = cls._load_files(
+                    role_path / 'handlers',
+                    obj_fact_factory(HandlerFile.from_ans_object), handler_loader)
 
         def transform_broken(broken_file: BrokenFile) -> Tuple[str, str]:
             path, reason = broken_file
@@ -498,7 +512,8 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
         return cls(
                 role_name=role_path.name, meta_file=meta, default_var_files=dfs,
                 role_var_files=cfs, task_files=tfs, handler_files=hfs,
-                broken_files=tuple(transform_broken(broken) for broken in chain(bdfs, bcfs, btfs, bhfs, broken_meta_files)))
+                broken_files=tuple(transform_broken(broken) for broken in chain(bdfs, bcfs, btfs, bhfs, broken_meta_files)),
+                logs=log_capture.logs)
 
 
 

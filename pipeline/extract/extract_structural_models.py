@@ -38,7 +38,6 @@ class ExtractStructuralModels(
             clone: ResultMap[GitRepo]
     ) -> ResultMap[MultiStructuralRoleModel]:
         """Run the stage."""
-        print('run!')
         role_repos: List[Tuple[GitRepo, str, List[str]]] = self.get_role_repositories(extract_role_metadata, clone, extract_git_metadata)
         num_revs = sum(len(revs) for (_, _, revs) in role_repos)
         if not self.config.commits:
