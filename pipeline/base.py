@@ -250,7 +250,7 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
                         result_id, result_full_path)
 
             return ResultMap(loaded)
-        except OSError:
+        except OSError as exc:
             raise CacheMiss()
         except yaml.YAMLError as exc:
             print(exc)

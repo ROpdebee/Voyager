@@ -1,5 +1,5 @@
 """Type aliases."""
-from typing import Set, Union, TYPE_CHECKING
+from typing import Set, Union, TypeVar, TYPE_CHECKING
 
 from ansible.playbook.task import Task
 from ansible.playbook.block import Block

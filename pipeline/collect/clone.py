@@ -126,7 +126,8 @@ class Clone(Stage[GitRepo, CloneConfig], requires=ExtractRoleMetadata):
         """
 
         repo_path = self.repo_path / user / repo_name
-        if self.repo_path.resolve() not in repo_path.resolve().parents:
+        if (self.repo_path.resolve() not in repo_path.resolve().parents
+                or len(repo_path.resolve().relative_to(self.repo_path.resolve()).parts) != 2):
             # If owner or name starts with a forward slash, it might try to
             # clone into a different directory, which is a path traversal
             # vulnerability
@@ -144,7 +145,7 @@ class Clone(Stage[GitRepo, CloneConfig], requires=ExtractRoleMetadata):
             if not self.config.resume:
                 raise AlreadyClonedException(
                         'Unable to clone repo: Target directory not empty')
-            return repo_path.relative_to(self.config.output_directory)
+            return repo_path.relative_to(self.repo_path)
 
         progress: Optional[git.RemoteProgress] = None
         if self.config.progress:
@@ -161,4 +162,4 @@ class Clone(Stage[GitRepo, CloneConfig], requires=ExtractRoleMetadata):
 
         # Close the cloned repository, we'll come back to it later
         clone_repo.close()
-        return repo_path.relative_to(self.config.output_directory)
+        return repo_path.relative_to(self.repo_path)

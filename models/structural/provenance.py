@@ -1,5 +1,5 @@
 """Structural model provenance."""
-from typing import ClassVar, Dict, Optional, Sequence, Union, TYPE_CHECKING
+from typing import ClassVar, Dict, Optional, Sequence, Union, TYPE_CHECKING, cast
 
 import abc
 
@@ -14,7 +14,6 @@ else:
     KeywordsMixin = str
 
 import graphviz as gv
-
 
 class GraphvizMixin:
 
@@ -51,14 +50,14 @@ class GraphvizMixin:
             child.gv_visit(graph)
             graph.add_edge(self, child, label=f'{attr_name}[{child_pos}]')
 
-    def gv_visit_keywords(self: KeywordsMixin, graph: 'SMGraph') -> None:
+    def gv_visit_keywords(self: KeywordsMixin, graph: 'SMGraph') -> None:  # type: ignore[misc]
         parent_id = str(id(self))
         for kw in set(self._interested_kw_names):
             if getattr(self, kw) is None:
                 continue
-            self.gv_visit_builtin(graph, kw, getattr(self, kw), parent_id)
+            cast(GraphvizMixin, self).gv_visit_builtin(graph, kw, getattr(self, kw), parent_id)
         for kw, val in self.misc_keywords.items():
-            self.gv_visit_builtin(graph, kw, val, parent_id)
+            cast(GraphvizMixin, self).gv_visit_builtin(graph, kw, val, parent_id)
 
 
     def gv_visit_builtin(
@@ -115,7 +114,7 @@ class SMGraph(gv.Digraph):
     ) -> None:
         self.edge(parent_id, child_id, label=label)
 
-    def add_node(self, obj: GraphvizMixin, label: str) -> None:
+    def add_node(self, obj: GraphvizMixin, label: Optional[str]) -> None:
         lbl = f'{obj.__class__.__name__}:\n{label}'
         self.node(
                 str(id(obj)), label=lbl, shape=obj._gv_shape,

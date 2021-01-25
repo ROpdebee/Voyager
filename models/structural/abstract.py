@@ -1,8 +1,13 @@
 """Abstract classes."""
+from __future__ import annotations
+
 from typing import (
+    Any,
     Collection,
     Callable,
+    Dict,
     Final,
+    Generic,
     List,
     Mapping,
     Optional,
@@ -12,10 +17,13 @@ from typing import (
     TypeVar,
     cast,
     get_args,
-    get_origin
+    get_origin,
+    overload,
+    Union,
+    TYPE_CHECKING,
 )
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from itertools import chain, product
 from operator import attrgetter, itemgetter
 from textwrap import indent
@@ -29,6 +37,9 @@ from . import diff as diff_mod
 from .types import AnsTaskOrBlock, Value
 from .provenance import GraphvizMixin, SMGraph, pformat
 
+if TYPE_CHECKING:
+    from .role import Task, HandlerTask, Block, HandlerBlock, TaskFile, HandlerFile, DefaultVariable, RoleVariable, DefaultVarFile, RoleVarFile
+
 # TODO: Should probably be cleaned up, this module is getting fairly large.
 #       Perhaps use more specific mixins in the diff module to do the diffing
 #       logic for each object type?
@@ -39,7 +50,7 @@ _FileType = TypeVar(
 
 
 class ContainerFile(
-        mixins.ObjectContainerMixin[mixins.SourceType, mixins.ObjectType],
+        mixins.ObjectContainerMixin[mixins.ObjectWithParentType],
         base.BaseFile,
         GraphvizMixin
 ):
@@ -49,16 +60,10 @@ class ContainerFile(
     types. These directories can contain multiple files, each with their own
     objects, but all with the same object type.
     """
-    def __init__(
-            self, file_name: str, elements: Collection[mixins.SourceType],
-            factory: Callable[[mixins.SourceType], mixins.ObjectType]
-    ) -> None:
-        super().__init__(
-                file_name, elements=elements, factory=factory)
 
     def gv_visit(self, g: SMGraph) -> None:
         g.add_node(self, label=self.file_name)
-        self.gv_visit_children(g, 'content', self)
+        self.gv_visit_children(g, 'content', [self])
 
     def __repr__(self) -> str:
         r = f'{self.__class__.__name__} ({self.file_name}):'
@@ -67,7 +72,7 @@ class ContainerFile(
         return f'{r}\n{el_repr}'
 
     @classmethod
-    def _match_files(  # type: ignore[misc]
+    def _match_files(
             cls: Type[_FileType],
             files_v1: Sequence[_FileType],
             files_v2: Sequence[_FileType]
@@ -92,7 +97,7 @@ class ContainerFile(
         return (added_files, removed_files, matched_files)
 
     @classmethod
-    def _match_file_relocations(  # type: ignore[misc]
+    def _match_file_relocations(
             cls: Type[_FileType],
             added: List[_FileType],
             removed: List[_FileType],
@@ -128,7 +133,7 @@ class ContainerFile(
         return added, removed, relocations
 
     @classmethod
-    def _create_file_relocation_diff(  # type: ignore[misc]
+    def _create_file_relocation_diff(
             cls: Type[_FileType], f1: _FileType, f2: _FileType
     ) -> diff_mod.Relocation:
         file_relocation_t = cast(
@@ -158,33 +163,45 @@ class ContainerFile(
 
     @abstractmethod
     def _create_element_addition(
-            self, el: mixins.ObjectType
+            self, el: mixins.ObjectWithParentType
     ) -> Sequence[diff_mod.Addition]:
         ...
 
     @abstractmethod
     def _create_element_removal(
-            self, el: mixins.ObjectType
+            self, el: mixins.ObjectWithParentType
     ) -> Sequence[diff_mod.Removal]:
         ...
 
 
+_AVType = TypeVar('_AVType', 'AbstractVariable[DefaultVarFile]', 'AbstractVariable[RoleVarFile]')
+_CVType = TypeVar('_CVType', 'DefaultVariable', 'RoleVariable')
 _AVFile = TypeVar(
-        '_AVFile', bound='AbstractVariableFile')  # type: ignore[type-arg]
+        '_AVFile', 'AbstractVariableFile[DefaultVariable]', 'AbstractVariableFile[RoleVariable]')
+_CVFile = TypeVar('_CVFile', 'DefaultVarFile', 'RoleVarFile')
 
 
 class AbstractVariableFile(
-        ContainerFile[Tuple[str, Value], mixins.VariableType],
+        ContainerFile[_CVType],
         diff.DiffableMixin
 ):
     """Role files containing variables."""
-    def __init__(
-            self, file_name: str, vars: Mapping[str, Value],
-            var_factory: Callable[[str, Value], mixins.VariableType]
-    ) -> None:
-        super().__init__(
-                file_name=file_name, elements=vars.items(),
-                factory=lambda v: var_factory(v[0], v[1]))
+
+    @classmethod
+    def _structure(cls: Type[AbstractVariableFile[_CVType]], obj: Dict[str, Any], eltype: Type[_CVType]) -> AbstractVariableFile[_CVType]:
+        file_name = obj['file_name']
+        content = [eltype(name=name, value=value) for name, value in obj['content'].items()]
+        return cls(file_name=file_name, elements=content)
+
+    @classmethod
+    def _from_ans_object(cls: Type[AbstractVariableFile[_CVType]], file_name: str, content: Mapping[str, Value], eltype: Type[_CVType]) -> AbstractVariableFile[_CVType]:
+        return cls(file_name=file_name, elements=[eltype(name=name, value=value) for name, value in content.items()])
+
+    def unstructure(self) -> Dict[str, Any]:
+        return {
+            'file_name': self.file_name,
+            'content': {var.name: var.value for var in self}
+        }
 
     def diff(
             self: _AVFile, other: _AVFile
@@ -272,9 +289,9 @@ class AbstractVariableFile(
         return (total_sim / max_num_vars, diffs)
 
     def _create_element_addition(
-            self, e: mixins.VariableType
+            self, e: _CVType
     ) -> Sequence[diff_mod.Addition]:
-        var_type_name = self.__class__.__name__.replace('sFile', 'Variable')
+        var_type_name = self.__class__.__name__.replace('File', 'iable')
         var_addition_t = cast(
                 Type[diff.Addition],
                 getattr(diff, f'{var_type_name}Addition'))
@@ -282,9 +299,9 @@ class AbstractVariableFile(
         return [var_addition_t(obj_id=e.id, add_val=e)]
 
     def _create_element_removal(
-            self, e: mixins.VariableType
+            self, e: _CVType
     ) -> Sequence[diff_mod.Removal]:
-        var_type_name = self.__class__.__name__.replace('sFile', 'Variable')
+        var_type_name = self.__class__.__name__.replace('File', 'iable')
         var_removal_t = cast(
                 Type[diff.Removal],
                 getattr(diff, f'{var_type_name}Removal'))
@@ -296,7 +313,7 @@ class AbstractVariableFile(
             cls, old_diffs: Sequence[diff_mod.Diff]
     ) -> Sequence[diff_mod.Diff]:
         # Preprocess: Extract additions and removals
-        var_type_name = cls.__name__.replace('sFile', 'Variable')
+        var_type_name = cls.__name__.replace('File', 'iable')
         var_relocation_t = getattr(diff, f'{var_type_name}Relocation')
 
         new_diffs: List[diff.Diff] = []
@@ -314,20 +331,21 @@ class AbstractVariableFile(
             else:
                 new_diffs.append(d)
 
-        for a in additions:
-            if (rd := cls._find_matching_removal(a, removals)) is not None:
+        ad: diff.Addition  # Helping mypy
+        for ad in additions:
+            if (rd := cls._find_matching_removal(ad, removals)) is not None:
                 r, ds = rd
                 assert isinstance(r.removed_value, AbstractVariable)
-                assert isinstance(a.added_value, AbstractVariable)
+                assert isinstance(ad.added_value, AbstractVariable)
                 new_diffs.append(var_relocation_t(
                         obj_id=r.removed_value.id,
                         prev_loc=r.removed_value.id,
-                        new_loc=a.added_value.id))
+                        new_loc=ad.added_value.id))
                 new_diffs.extend(ds)
                 removals.remove(r)
             else:
                 # No matching deleted var found in another file, it's truly new
-                new_diffs.append(a)
+                new_diffs.append(ad)
         new_diffs.extend(removals)
         return new_diffs
 
@@ -346,7 +364,7 @@ class AbstractVariableFile(
         return None
 
     @classmethod
-    def diff_multiple(  # type: ignore[misc]
+    def diff_multiple(
             cls: Type[_AVFile],
             files_v1: Sequence[_AVFile],
             files_v2: Sequence[_AVFile]
@@ -378,12 +396,8 @@ class AbstractVariableFile(
         return cls._match_var_relocations(diffs)
 
 
-_AVType = TypeVar(
-        '_AVType', bound='AbstractVariable')  # type: ignore[type-arg]
-
-
 class AbstractVariable(
-        mixins.ChildObjectMixin[mixins.ParentType],
+        mixins.ChildObjectMixin[_CVFile],
         diff.DiffableMixin,
         base.BaseVariable
 ):
@@ -392,11 +406,6 @@ class AbstractVariable(
     ChildObjectMixin cannot be mixed into BaseVariable, as this leads to
     issues with type variables.
     """
-    def __init__(
-            self, name: str, value: Value, parent: mixins.ParentType
-    ) -> None:
-        super().__init__(name, value, parent=parent)
-
     @property
     def id(self) -> str:
         return cast(base.BaseFile, self.parent).file_name + ':' + self.name
@@ -422,24 +431,41 @@ class AbstractVariable(
                 obj_id=self.id, prev_val=self.value, new_val=other.value)]
 
 
-_ABFile = TypeVar(
-        '_ABFile', bound='AbstractBlockFile')  # type: ignore[type-arg]
+_ABFile = TypeVar('_ABFile', 'AbstractBlockFile[Block]', 'AbstractBlockFile[HandlerBlock]')
+_ABType = TypeVar(
+        '_ABType',
+        'AbstractBlock[Task, Block, TaskFile]',
+        'AbstractBlock[HandlerTask, HandlerBlock, HandlerFile]')
+_ATType = TypeVar('_ATType', 'AbstractTask[Block]', 'AbstractTask[HandlerBlock]')
+_CBFile = TypeVar('_CBFile', 'TaskFile', 'HandlerFile')
+_CBType = TypeVar('_CBType', 'Block', 'HandlerBlock')
+_CTType = TypeVar('_CTType', 'Task', 'HandlerTask')
 
 
 class AbstractBlockFile(
-        ContainerFile[AnsTaskOrBlock, mixins.BlockType],
-        diff.DiffableMixin
+        ContainerFile[_CBType],
+        diff.DiffableMixin,
+        ABC,
 ):
     """Role files containing blocks."""
-    def __init__(
-            self, file_name: str, block_list: Sequence[AnsTaskOrBlock],
-            block_factory: Callable[[AnsTaskOrBlock], mixins.BlockType]
-    ) -> None:
-        super().__init__(
-                file_name=file_name, elements=block_list,
-                factory=block_factory)
 
-    def get_path_to(self, ch: mixins.BlockType) -> str:
+    @classmethod
+    def _structure(cls: Type[AbstractBlockFile[_CBType]], obj: Dict[str, Any], eltype: Type[_CBType]) -> AbstractBlockFile[_CBType]:
+        file_name = obj['file_name']
+        content = [cast(_CBType, eltype.structure(cobj)) for cobj in obj['content']]
+        return cls(file_name=file_name, elements=content)
+
+    @classmethod
+    def _from_ans_object(cls: Type[AbstractBlockFile[_CBType]], file_name: str, content: Sequence[anspb.block.Block], eltype: Type[_CBType]) -> AbstractBlockFile[_CBType]:
+        return cls(file_name=file_name, elements=[eltype.from_ans_object(ds=cobj) for cobj in content])
+
+    def unstructure(self) -> Dict[str, Any]:
+        return {
+            'file_name': self.file_name,
+            'content': [obj.unstructure() for obj in self]
+        }
+
+    def get_path_to(self, ch: _ABType) -> str:
         return f'{self.file_name}[{self.index(ch)}]'
 
     def diff(
@@ -459,7 +485,7 @@ class AbstractBlockFile(
         return block_type.diff_multiple(self, other)
 
     @classmethod
-    def diff_multiple(  # type: ignore[misc]
+    def diff_multiple(
             cls: Type[_ABFile],
             files_v1: Sequence[_ABFile],
             files_v2: Sequence[_ABFile]
@@ -502,28 +528,28 @@ class AbstractBlockFile(
 
         return super()._sim_score_internal(
             self._elements, other._elements,
-            lambda c1, c2: cast(bool, c1.is_relocated(c2)),
-            lambda c1, c2: cast(float, c1.similarity_score(c2)))
+            lambda c1, c2: c1.is_relocated(c2),
+            lambda c1, c2: c1.similarity_score(c2))
 
     @classmethod
     def get_block_type_name(cls) -> str:
-        return cls.__name__.replace('sFile', 'Block').replace('Task', '')
+        return cls.__name__.replace('File', 'Block').replace('Task', '')
 
     def _create_element_addition(
-            self, e: mixins.BlockType
+            self, e: _CBType
     ) -> Sequence[diff_mod.Addition]:
         assert isinstance(e, AbstractBlock)
         return e.create_additions()
 
     def _create_element_removal(
-            self, e: mixins.BlockType
+            self, e: _CBType
     ) -> Sequence[diff_mod.Removal]:
         assert isinstance(e, AbstractBlock)
         return e.create_removals()
 
     @classmethod
-    def _create_element_relocation(  # type: ignore[misc]
-            cls, e1: '_ABType', e2: '_ABType'
+    def _create_element_relocation(
+            cls, e1: _CBType, e2: _CBType
     ) -> diff_mod.Relocation:
         block_type_name = cls.get_block_type_name()
         addition_t = cast(
@@ -614,32 +640,65 @@ class AbstractBlockFile(
         return new_diffs
 
 
-_ABType = TypeVar('_ABType', bound='AbstractBlock')  # type: ignore[type-arg]
-
-
 class AbstractBlock(
         mixins.KeywordsMixin,
-        mixins.ObjectContainerMixin[AnsTaskOrBlock, mixins.ObjectType],
-        mixins.ChildObjectMixin[mixins.ParentType],
+        mixins.ObjectContainerMixin[Union[_CTType, _CBType]],
+        mixins.ChildObjectMixin[Union[_CBType, _CBFile]],
         diff.DiffableMixin,
         base.BaseBlock,
         ans_type=anspb.block.Block,
         extra_kws={'block', 'rescue', 'always', 'when'}
 ):
     def __init__(
-            self, ds: anspb.block.Block, parent: mixins.ParentType
+            self, *args: object, **kwargs: Any
     ) -> None:
-        super().__init__(ds=ds, elements=[], parent=parent)
+        super().__init__(*args, **kwargs, elements=[])
         # Initialize the elements ourselves
         task_lists = [self.block, self.rescue, self.always]
         self._elements = tuple(
                 chain(*(tl for tl in task_lists if tl is not None)))
+        for task in self:
+            task.parent = self  # type: ignore[assignment]
 
-    def _element_factory(self, ans_obj: AnsTaskOrBlock) -> mixins.ObjectType:
+    @classmethod
+    def structure(cls: Type[AbstractBlock[_CTType, _CBType, Any]], obj: Any) -> AbstractBlock[_CTType, _CBType, Any]:
+        def convert(thing: Any) -> Any:
+            if 'block' in thing:
+                return cls.structure(thing)
+            return cls._get_task_type().structure(thing)
+        def convert_all(things: List[Any]) -> List[Any]:
+            return [convert(thing) for thing in things]
+
+        for attr in ('block', 'rescue', 'always'):
+            if attr in obj:
+                obj[attr] = convert_all(obj[attr])
+        return cls(kws=obj)
+
+
+    def unstructure(self) -> Any:
+        partial = cast(Dict[str, Any], super().unstructure())
+        if 'content' in partial:
+            del partial['content']  # From object container, don't want to serialize it.
+        for attr in ('block', 'rescue', 'always'):
+            if attr in partial:
+                partial[attr] = [o.unstructure() for o in partial[attr]]
+        return partial
+
+    @overload
+    @classmethod
+    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: anspb.task.Task) -> _CTType:
+        ...
+    @overload
+    @classmethod
+    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: anspb.block.Block) -> _CBType:
+        ...
+
+    @classmethod
+    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: AnsTaskOrBlock) -> Union[_CTType, _CBType]:
         # Nested blocks are the same block type, with this block as parent
         if (isinstance(ans_obj, anspb.block.Block)
                 and isinstance(ans_obj._parent, anspb.block.Block)):
-            return self.__class__(ans_obj, self)  # type: ignore
+            return cast(_CBType, cls.from_ans_object(ds=ans_obj))
 
         # Nested blocks that are the result of a static import of a file are
         # removed and replaced by the task that imported it (its parent)
@@ -648,13 +707,15 @@ class AbstractBlock(
             ans_obj = ans_obj._parent
 
         assert isinstance(ans_obj, anspb.task.Task)
-        object_type = self._get_task_type()
-        return object_type(ans_obj, self)  # type: ignore
+        object_type = cls._get_task_type()
+        return object_type.from_ans_object(ds=ans_obj)
 
+
+    @classmethod
     def _task_list_transformer(
-            self, ans_objs: Sequence[AnsTaskOrBlock]
-    ) -> Sequence[mixins.ObjectType]:
-        return tuple(self._element_factory(e) for e in ans_objs)
+            cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_objs: Sequence[AnsTaskOrBlock]
+    ) -> Sequence[Union[_CTType, _CBType]]:
+        return tuple(cls._element_factory(e) for e in ans_objs)
 
     def __repr__(self) -> str:
         r = f'{self.__class__.__name__} {{'
@@ -674,21 +735,25 @@ class AbstractBlock(
         return r
 
     @classmethod
-    def _get_task_type(cls) -> Type[base.BaseTask]:
-        bases = cls.__orig_bases__  # type: ignore[attr-defined]
-        abstract_block_base = next(
+    def _get_task_type(cls) -> Type[_CTType]:
+        bases: Sequence[type] = cls.__orig_bases__  # type: ignore[attr-defined]
+        abs_base = next(
                 orig_base for orig_base in bases
-                if ((base := get_origin(orig_base)) is not None
-                    and issubclass(base, AbstractBlock)))
-        contained_types = get_args(get_args(abstract_block_base)[0])
-        task_type = next(
-                typ for typ in contained_types
-                if isinstance(typ, type) and issubclass(typ, AbstractTask))
-        return task_type
+                if ((base := get_origin(orig_base)) is not None  # type: ignore[has-type]
+                    and issubclass(base, AbstractBlock)))  # type: ignore[has-type]
+        task_type = get_args(abs_base)[0]
+        assert isinstance(task_type, type) and issubclass(task_type, AbstractTask), 'Wrongly subclassed AbstractBlock? Make sure the first type arg is a Task.'
+        return task_type  # type: ignore[return-value]
 
-    _transform_block: Final = _task_list_transformer
-    _transform_rescue: Final = _task_list_transformer
-    _transform_always: Final = _task_list_transformer
+    @classmethod
+    def _transform_block(cls, ans_objs: Sequence[AnsTaskOrBlock]) -> Sequence[Union['_CTType', '_CBType']]:
+        return cls._task_list_transformer(ans_objs)
+    @classmethod
+    def _transform_rescue(cls, ans_objs: Sequence[AnsTaskOrBlock]) -> Sequence[Union['_CTType', '_CBType']]:
+        return cls._task_list_transformer(ans_objs)
+    @classmethod
+    def _transform_always(cls, ans_objs: Sequence[AnsTaskOrBlock]) -> Sequence[Union['_CTType', '_CBType']]:
+        return cls._task_list_transformer(ans_objs)
 
     _block_default = tuple
     _rescue_default = tuple
@@ -708,7 +773,7 @@ class AbstractBlock(
         assert isinstance(self.parent, AbstractBlockFile)
         return f'{self.parent.file_name}[{self.parent.index(self)}]'
 
-    def get_path_to(self, child: mixins.ObjectType) -> str:
+    def get_path_to(self, child: mixins.ObjectWithParentType) -> str:
         if child in self.block:
             cont_name = 'block'
         elif child in self.rescue:
@@ -728,9 +793,9 @@ class AbstractBlock(
 
         return super()._sim_score_internal(
             all1, all2,
-            lambda c1, c2: type(c1) == type(c2) and c1.is_relocated(c2),
+            lambda c1, c2: type(c1) == type(c2) and c1.is_relocated(c2),  # type: ignore[arg-type]
             lambda c1, c2:
-                cast(float, c1.similarity_score(c2))
+                c1.similarity_score(c2)  # type: ignore[arg-type]
                 if type(c1) == type(c2) else 0)
 
     def _diff_self(
@@ -783,10 +848,8 @@ class AbstractBlock(
 
         tasks1 = [t for t in all1 if isinstance(t, AbstractTask)]
         tasks2 = [t for t in all2 if isinstance(t, AbstractTask)]
-        blocks1 = [
-                cast(_ABType, t) for t in all1 if isinstance(t, AbstractBlock)]
-        blocks2 = [
-                cast(_ABType, t) for t in all2 if isinstance(t, AbstractBlock)]
+        blocks1 = [t for t in all1 if isinstance(t, AbstractBlock)]
+        blocks2 = [t for t in all2 if isinstance(t, AbstractBlock)]
 
         task_diffs = task_type.diff_multiple(tasks1, tasks2)
         block_diffs = self.diff_multiple(blocks1, blocks2)
@@ -863,16 +926,16 @@ class AbstractBlock(
         return rems
 
     @classmethod
-    def diff_multiple(  # type: ignore[misc]
+    def diff_multiple(
             cls: Type[_ABType],
-            blocks1: Sequence[_ABType], blocks2: Sequence[_ABType]
+            blocks1: Sequence[_CBType], blocks2: Sequence[_CBType]
     ) -> Sequence[diff_mod.Diff]:
         block_relocation_t = cast(
                 Type[diff.Relocation],
                 getattr(diff, cls.__name__ + 'Relocation'))
 
         return super()._diff_multiple_internal(
-                blocks1, blocks2,
+                blocks1, blocks2,  # type: ignore[arg-type]
                 cls.create_additions, cls.create_removals,
                 lambda b1, b2: block_relocation_t(
                         obj_id=b1.id, prev_loc=b1.id, new_loc=b2.id),
@@ -880,18 +943,13 @@ class AbstractBlock(
                 lambda b1, b2: b1.similarity_score(b2))
 
 
-_ATType = TypeVar('_ATType', bound='AbstractTask')  # type: ignore[type-arg]
-
-
 class AbstractTask(
         mixins.KeywordsMixin,
-        mixins.ChildObjectMixin[mixins.ParentType],
+        mixins.ChildObjectMixin[_CBType],
         diff.DiffableMixin,
         base.BaseTask,
         ans_type=anspb.task.Task,
         extra_kws={'args', 'action', 'loop', 'loop_control', 'when'}):
-    def __init__(self, ds: anspb.task.Task, parent: mixins.ParentType) -> None:
-        super().__init__(ds=ds, parent=parent)
 
     def gv_visit(self, g: SMGraph) -> None:
         g.add_node(self, '')
@@ -956,8 +1014,8 @@ class AbstractTask(
         return []
 
     @classmethod
-    def diff_multiple(  # type: ignore[misc, override]
-            cls, tasks1: Sequence[_ATType], tasks2: Sequence[_ATType]
+    def diff_multiple(
+            cls: Type[_ATType], tasks1: Sequence[_CTType], tasks2: Sequence[_CTType]
     ) -> Sequence[diff_mod.Diff]:
         task_relocation_t = cast(
                 Type[diff.Relocation],
@@ -970,7 +1028,7 @@ class AbstractTask(
                 getattr(diff, cls.__name__ + 'Removal'))
 
         return super()._diff_multiple_internal(
-                tasks1, tasks2,
+                tasks1, tasks2,  # type: ignore[arg-type]
                 lambda t: [task_addition_t(obj_id=t.id, add_val=t)],
                 lambda t: [task_removal_t(obj_id=t.id, rem_val=t)],
                 lambda t1, t2: task_relocation_t(
@@ -1021,3 +1079,7 @@ class AbstractTask(
                 if (kw in self.misc_keywords and kw in other.misc_keywords
                     and self.misc_keywords[kw] == other.misc_keywords[kw]))
         return (main_kw_matches + misc_kw_matches) / len(all_kws)
+
+    @classmethod
+    def structure(cls: Type[AbstractTask[_CBType]], obj: Dict[str, Value]) -> AbstractTask[_CBType]:
+        return cls(kws=obj)

@@ -44,12 +44,11 @@ class CloneConfig(MainConfig):
             'Resuming cloning from a previous run.', default=True)
 
 
-class ExtractVersionConfig(MainConfig):
-    """Configuration for version extraction."""
-    always_use_commit_date: Option[bool] = Option(
-            'Always use the commit date rather than the tagged date',
-            default=True)
+class ExtractStructuralModelsConfig(MainConfig):
+    """Configuration for structural model extraction."""
 
+    commits: Option[bool] = Option(
+            'Extract a structural model for each commit. If disabled, extracts for semantic versions only.', default=False)
 
 class DiffConfig(MainConfig):
     """Configuration for structural diffing."""

@@ -1,4 +1,4 @@
-from .converters import Converter as Converter, UnstructureStrategy as UnstructureStrategy
+from .converters import Converter as Converter, Converter as GenConverter, UnstructureStrategy as UnstructureStrategy
 from typing import Any
 
 global_converter: Converter

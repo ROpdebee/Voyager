@@ -14,7 +14,7 @@ import git
 import pendulum
 
 from models.base import Model
-from models.git import Commit
+from models.git import GitCommit as Commit
 
 
 MMP = Tuple[int, int, int]

@@ -154,9 +154,9 @@ def get_transformed_type(
         else:
             transformer_type = find_redef_origin(cls_node, transformer_name)
             if transformer_type is None:
-                # api.fail(
-                #        f'Cannot resolve type of `{transformer_name}`',
-                #        transformer.node, code=MISC)
+                api.fail(
+                       f'Cannot resolve type of `{transformer_name}`',
+                       transformer.node, code=MISC)
                 return None
     else:
         api.fail(

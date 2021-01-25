@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 from typing import (
+        Any,
         Callable,
+        Dict,
         List,
         Mapping,
         Optional,
         Sequence,
         Tuple,
         Union,
-        cast
+        cast,
+        TYPE_CHECKING
 )
 
 from itertools import chain
@@ -19,6 +22,14 @@ from functools import partial
 from os import devnull
 from pathlib import Path
 
+import attr
+import cattr
+import yaml
+try:
+    from yaml import CLoader as Loader, CDumper as Dumper
+except ImportError:
+    from yaml import Loader, Dumper  # type: ignore[misc]
+
 import ansible as ans
 import ansible.inventory.manager as ansinvmgr
 import ansible.parsing.yaml.objects as ansobj
@@ -27,14 +38,17 @@ import ansible.playbook.handler as anspbh
 import ansible.playbook.role as ansrole
 import ansible.playbook.role.include as ansrinc
 
+from models.base import Model
 from . import abstract, base, diff, mixins
 from .types import AnsTaskOrBlock, Value
 from .provenance import GraphvizMixin, SMGraph, pformat
 
 
-FileList = Sequence[mixins.FileType]
-BrokenFile = Tuple[Path, ans.errors.AnsibleError]
+FileList = Tuple[mixins.FileType, ...]
+BrokenFile = Tuple[Path, str]
 Platform = Tuple[str, str]
+
+CONVERTER = cattr.GenConverter()
 
 
 class MetaFile(base.BaseFile, GraphvizMixin, diff.DiffableMixin):
@@ -42,10 +56,11 @@ class MetaFile(base.BaseFile, GraphvizMixin, diff.DiffableMixin):
     def __init__(
             self,
             file_name: str,
-            ds: ansrole.metadata.RoleMetadata
+            metablock: MetaBlock
     ) -> None:
         super().__init__(file_name)
-        self._metablock = MetaBlock(ds, self)
+        self._metablock = metablock
+        metablock.parent = self
 
     @property
     def metablock(self) -> MetaBlock:
@@ -61,6 +76,20 @@ class MetaFile(base.BaseFile, GraphvizMixin, diff.DiffableMixin):
 
         return self.metablock.diff(other.metablock)
 
+    @classmethod
+    def from_ans_object(cls, file_name: str, meta_ds: ansrole.metadata.RoleMetadata) -> MetaFile:
+        return cls(file_name, MetaBlock.from_ans_object(ds=meta_ds))
+
+    @classmethod
+    def structure(cls, obj: Dict[str, Any]) -> MetaFile:
+        return cls(obj['file_name'], MetaBlock.structure(obj['metablock']))
+
+    def unstructure(self) -> Dict[str, object]:
+        return {
+            'file_name': self.file_name,
+            'metablock': self.metablock.unstructure()
+        }
+
 
 class MetaBlock(
         mixins.ChildObjectMixin[MetaFile],
@@ -72,20 +101,25 @@ class MetaBlock(
 ):
     """Meta-information of the role."""
     def __init__(
-            self, ds: ansrole.metadata.RoleMetadata, parent: MetaFile
+            self, kws: Dict[str, Value]
     ) -> None:
-        super().__init__(ds=ds, parent=parent)
+        super().__init__(kws=kws)
 
-        self._platforms = self._extract_platforms(ds)
+        self._platforms = self._extract_platforms(kws)
+
+
+    @classmethod
+    def structure(cls, obj: Dict[str, Value]) -> MetaBlock:
+        return cls(kws=obj)
 
     @property
     def platforms(self) -> Sequence[Platform]:
         return self._platforms
 
     def _extract_platforms(
-            self, ds: ansrole.metadata.RoleMetadata
+            self, kws: Dict[str, Value]
     ) -> Sequence[Platform]:
-        gi = ds.galaxy_info
+        gi = kws.get('galaxy_info')
         if not isinstance(gi, dict):
             return []
 
@@ -103,15 +137,26 @@ class MetaBlock(
                     if isinstance(v, str))
         return platforms_flat
 
+    @classmethod
     def _transform_galaxy_info(
             self, gi: Mapping[str, Value]
     ) -> Mapping[str, Value]:
         return {k: v for k, v in gi.items() if k != 'platforms'}
 
+    @classmethod
     def _transform_dependencies(
-            self, deps: Sequence[ansrole.include.RoleInclude]
+            cls, deps: Sequence[Union[str, Dict[str, str]]]
     ) -> Sequence[str]:
-        return tuple(ri.get_name() for ri in deps)
+        return [cls._get_dep_name(dep) for dep in deps]
+
+    @classmethod
+    def _get_dep_name(cls, dep: Union[str, Dict[str, str]]) -> str:
+        if isinstance(dep, str):
+            return dep
+        try:
+            return dep['role']
+        except KeyError:
+            return dep['name']
 
     _dependencies_default = list
 
@@ -152,42 +197,44 @@ class MetaBlock(
 
 class DefaultVariable(
         base.DefaultsTrait,
-        abstract.AbstractVariable['DefaultsFile']
+        abstract.AbstractVariable['DefaultVarFile']
 ):
     """Variables in defaults/*.yml."""
     pass
 
 
-class ConstantVariable(
+class RoleVariable(
         base.ConstantsTrait,
-        abstract.AbstractVariable['ConstantsFile']
+        abstract.AbstractVariable['RoleVarFile']
 ):
     """Variables in vars/*.yml."""
     pass
 
 
-class DefaultsFile(
+class DefaultVarFile(
         base.DefaultsTrait,
         abstract.AbstractVariableFile[DefaultVariable]
 ):
-    def __init__(
-            self, file_name: str, vars: Mapping[str, Value]
-    ) -> None:
-        super().__init__(
-                file_name=file_name, vars=vars,
-                var_factory=partial(DefaultVariable, parent=self))
+    @classmethod
+    def structure(cls, obj: Dict[str, object]) -> DefaultVarFile:
+        return cast(DefaultVarFile, super()._structure(obj, DefaultVariable))
+
+    @classmethod
+    def from_ans_object(cls, path: str, content: Mapping[str, Value]) -> DefaultVarFile:
+        return cast(DefaultVarFile, super()._from_ans_object(path, content, DefaultVariable))
 
 
-class ConstantsFile(
+class RoleVarFile(
         base.ConstantsTrait,
-        abstract.AbstractVariableFile[ConstantVariable]
+        abstract.AbstractVariableFile[RoleVariable]
 ):
-    def __init__(
-            self, file_name: str, vars: Mapping[str, Value]
-    ) -> None:
-        super().__init__(
-                file_name=file_name, vars=vars,
-                var_factory=partial(ConstantVariable, parent=self))
+    @classmethod
+    def structure(cls, obj: Dict[str, object]) -> RoleVarFile:
+        return cast(RoleVarFile, super()._structure(obj, RoleVariable))
+
+    @classmethod
+    def from_ans_object(cls, path: str, content: Mapping[str, Value]) -> RoleVarFile:
+        return cast(RoleVarFile, super()._from_ans_object(path, content, RoleVariable))
 
 
 class Task(
@@ -206,137 +253,147 @@ class HandlerTask(
     pass
 
 
-class Block(
-        base.TasksTrait,
-        abstract.AbstractBlock[
-            Union['Block', Task],
-            Union['Block', 'TasksFile']]
-):
-    pass
+# Bug in typing? "Too many parameters for abstract.AbstractBlock"
+if TYPE_CHECKING:
+    class Block(
+            base.TasksTrait,
+            abstract.AbstractBlock['Task', 'Block', 'TaskFile']
+    ):
+        pass
 
 
-class HandlerBlock(
-        base.HandlersTrait,
-        abstract.AbstractBlock[
-            Union['HandlerBlock', HandlerTask],
-            Union['HandlerBlock', 'HandlersFile']]
-):
-    pass
+    class HandlerBlock(
+            base.HandlersTrait,
+            abstract.AbstractBlock['HandlerTask', 'HandlerBlock', 'HandlerFile']
+    ):
+        pass
+else:
+    class Block(
+            base.TasksTrait,
+            abstract.AbstractBlock[Task]
+    ):
+        pass
 
 
-class TasksFile(
+    class HandlerBlock(
+            base.HandlersTrait,
+            abstract.AbstractBlock[HandlerTask]
+    ):
+        pass
+
+class TaskFile(
         base.TasksTrait,
         abstract.AbstractBlockFile[Block]
 ):
-    def __init__(
-            self, file_name: str, block_list: Sequence[AnsTaskOrBlock]
-    ) -> None:
-        super().__init__(
-                file_name=file_name, block_list=block_list,
-                block_factory=partial(Block, parent=self))
+    @classmethod
+    def structure(cls, obj: Dict[str, object]) -> TaskFile:
+        return cast(TaskFile, super()._structure(obj, Block))
+
+    @classmethod
+    def from_ans_object(cls, path: str, content: Sequence[anspb.block.Block]) -> TaskFile:
+        return cast(TaskFile, super()._from_ans_object(path, content, Block))
 
 
-class HandlersFile(
+class HandlerFile(
         base.HandlersTrait,
         abstract.AbstractBlockFile[HandlerBlock]
 ):
-    def __init__(
-            self, file_name: str, block_list: Sequence[AnsTaskOrBlock]
-    ) -> None:
-        super().__init__(
-                file_name=file_name, block_list=block_list,
-                block_factory=partial(HandlerBlock, parent=self))
+    @classmethod
+    def structure(cls, obj: Dict[str, object]) -> HandlerFile:
+        return cast(HandlerFile, super()._structure(obj, HandlerBlock))
+
+    @classmethod
+    def from_ans_object(cls, path: str, content: Sequence[anspb.block.Block]) -> HandlerFile:
+        return cast(HandlerFile, super()._from_ans_object(path, content, HandlerBlock))
 
 
+
+for tpe in (MetaFile, DefaultVarFile, RoleVarFile, HandlerFile, TaskFile):
+    CONVERTER.register_structure_hook(
+        tpe,
+        lambda obj, cls: cls.structure(obj))  # type: ignore[attr-defined, misc, no-any-return]
+    CONVERTER.register_unstructure_hook(  # type: ignore[misc]
+        tpe, lambda inst: inst.unstructure())  # type: ignore[attr-defined, no-any-return]
+
+
+class RoleMetadata(ansrole.metadata.RoleMetadata):
+    """Custom role to disable dependency resolving."""
+
+    def _load_dependencies(self, attr: str, ds: Any) -> List[object]:
+        # Disable resolving the dependencies.
+        roles = []
+        if ds:
+            if not isinstance(ds, list):
+                raise ans.errors.AnsibleParserError('Expected role dependencies to be a list.', obj=self._ds)  # type: ignore[attr-defined, call-arg]
+
+            for role_def in ds:
+                if isinstance(role_def, str) or 'role' in role_def or 'name' in role_def:
+                    roles.append(role_def)
+                    continue
+                try:
+                    # role_def is new style: { src: 'galaxy.role,version,name', other_vars: "here" }
+                    def_parsed = ansrole.requirement.RoleRequirement.role_yaml_parse(role_def)  # type: ignore[attr-defined]
+                    if def_parsed.get('name'):
+                        role_def['name'] = def_parsed['name']
+                    roles.append(role_def)
+                except ans.errors.AnsibleError as exc:
+                    raise ans.errors.AnsibleParserError(str(exc), obj=role_def, orig_exc=exc)  # type: ignore[call-arg]
+
+        return roles
+
+
+@attr.s(auto_attribs=True)
 class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
-    def __init__(
-            self, role_name: str, meta_file: MetaFile,
-            defaults: FileList[DefaultsFile], consts: FileList[ConstantsFile],
-            tasks: FileList[TasksFile], handlers: FileList[HandlersFile],
-            broken_files: Sequence[BrokenFile]
-    ) -> None:
-        self._role_name = role_name
-        self._mf = meta_file
-        self._df = defaults
-        self._cf = consts
-        self._tf = tasks
-        self._hf = handlers
-        self._broken_files = broken_files
-
-    @property
-    def role_name(self) -> str:
-        return self._role_name
-
-    @property
-    def meta_file(self) -> MetaFile:
-        return self._mf
-
-    @property
-    def defaults_files(self) -> FileList[DefaultsFile]:
-        return self._df
-
-    @property
-    def constants_files(self) -> FileList[ConstantsFile]:
-        return self._cf
-
-    @property
-    def tasks_files(self) -> FileList[TasksFile]:
-        return self._tf
-
-    @property
-    def handlers_files(self) -> FileList[HandlersFile]:
-        return self._hf
-
-    @property
-    def broken_files(self) -> Sequence[BrokenFile]:
-        return self._broken_files
+    role_name: str
+    meta_file: MetaFile
+    default_var_files: FileList[DefaultVarFile]
+    role_var_files: FileList[RoleVarFile]
+    task_files: FileList[TaskFile]
+    handler_files: FileList[HandlerFile]
+    broken_files: FileList[Tuple[str, str]]
 
     def gv_visit(self, g: SMGraph) -> None:
         g.add_node(self, label=self.role_name)
         self.gv_visit_child(g, 'meta_file')
-        self.gv_visit_children(g, 'defaults', self.defaults_files)
-        self.gv_visit_children(g, 'constants', self.constants_files)
-        self.gv_visit_children(g, 'tasks', self.tasks_files)
-        self.gv_visit_children(g, 'handlers', self.handlers_files)
+        self.gv_visit_children(g, 'defaults', self.default_var_files)
+        self.gv_visit_children(g, 'constants', self.role_var_files)
+        self.gv_visit_children(g, 'tasks', self.task_files)
+        self.gv_visit_children(g, 'handlers', self.handler_files)
 
     def diff(self, other: Role) -> Sequence[diff.Diff]:
-        mdiff = self._mf.diff(other._mf)
-        ddiff = DefaultsFile.diff_multiple(self._df, other._df)
-        cdiff = ConstantsFile.diff_multiple(self._cf, other._cf)
-        tdiff = TasksFile.diff_multiple(self._tf, other._tf)
-        hdiff = HandlersFile.diff_multiple(self._hf, other._hf)
-        return list(chain(mdiff, ddiff, cdiff, tdiff, hdiff))
+        mdiff = self.meta_file.diff(other.meta_file)
+        dvdiff = DefaultVarFile.diff_multiple(self.default_var_files, other.default_var_files)
+        rvdiff = RoleVarFile.diff_multiple(self.role_var_files, other.role_var_files)
+        tdiff = TaskFile.diff_multiple(self.task_files, other.task_files)
+        hdiff = HandlerFile.diff_multiple(self.handler_files, other.handler_files)
+        return list(chain(mdiff, dvdiff, rvdiff, tdiff, hdiff))
 
     @classmethod
-    def _load_role(cls, role_path: Path, deps_path: Path) -> ansrole.Role:
+    def _load_role(cls, role_path: Path) -> ansrole.Role:
         dummy_play = anspb.play.Play()
         dl = ans.parsing.dataloader.DataLoader()
         var_mgr = ans.vars.manager.VariableManager(
                 loader=dl, inventory=ansinvmgr.InventoryManager(dl))
-        # HACK: We need to get Ansible to load roles in the dependency path,
-        # which may differ from the path of the role itself. Hijack the
-        # configuration to insert this path in the search list.
-        if not str(deps_path) in ans.constants.DEFAULT_ROLES_PATH:
-            ans.constants.DEFAULT_ROLES_PATH.append(str(deps_path))
         # Shut up the deprecation warnings, it clutters the output
         ans.constants.DEPRECATION_WARNINGS = False
         role_def = ansrinc.RoleInclude.load(
                 str(role_path), dummy_play,
                 variable_manager=var_mgr)
-        with open(devnull, 'w') as fnull:
-            with redirect_stderr(fnull), redirect_stdout(fnull):
-                return ansrole.Role.load(role_def, dummy_play)
+        r = ansrole.Role(play=dummy_play)  # type: ignore[call-arg]
+        r._role_path = str(role_path)
+        r._variable_manager = var_mgr
+        r._loader = dl
+        return r
 
     @classmethod
     def _load_files(
-            cls, files_dir: Path, main: Optional[mixins.SourceType],
+            cls, files_dir: Path,
             factory: Callable[[Path, mixins.SourceType], mixins.FileType],
-            loader: Callable[[Path], mixins.SourceType]
+            loader: Callable[[Path], mixins.SourceType],
+            top_level: bool = True,
     ) -> Tuple[FileList[mixins.FileType], Sequence[BrokenFile]]:
-        fl = []
+        fl: List[mixins.FileType] = []
         broken: List[BrokenFile] = []
-        if main:
-            fl.append(factory(files_dir / 'main.yml', main))
         # Force the directory iterator to raise exception early, so that we
         # don't mistakenly catch an exception from a loader
         try:
@@ -345,19 +402,20 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
             all_files = []
 
         for file in all_files:
-            if file.name == 'main.yml' and main is not None:
-                continue
             if file.is_dir():
                 files, broken_files = cls._load_files(
-                        file, None, factory, loader)
+                        file, factory, loader, False)
                 fl.extend(files)
                 broken.extend(broken_files)
             elif file.suffix.lower() in ('.yml', '.yaml', '.json'):
                 try:
-                    fl.append(factory(file, loader(file)))
+                    if file.stem == 'main' and top_level:
+                        fl.insert(0, factory(file, loader(file)))
+                    else:
+                        fl.append(factory(file, loader(file)))
                 except ans.errors.AnsibleError as err:
-                    broken.append((file, err))
-        return fl, broken
+                    broken.append((file, str(err)))
+        return tuple(fl), broken
 
     @staticmethod
     def _load_vars(var_path: Path, r: ansrole.Role) -> Mapping[str, Value]:
@@ -385,12 +443,32 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
                 use_handlers=handlers)
         return blks
 
+
+    @staticmethod
+    def _load_metadata_obj(role_path: Path, role: ansrole.Role) -> Tuple[ansrole.metadata.RoleMetadata, Optional[BrokenFile]]:
+        metadata_dict = role._load_role_yaml('meta')
+        if not metadata_dict:
+            return (RoleMetadata(), None)
+
+        if not isinstance(metadata_dict, dict):
+            return (RoleMetadata(),
+                    (role_path / 'meta/main.yml', f"the 'meta/main.yml' for role {role.get_name()} is not a dictionary"))  # type: ignore[attr-defined]
+
+        try:
+            return (RoleMetadata(owner=role).load_data(metadata_dict), None)  # type: ignore[call-arg, attr-defined]
+        except ans.errors.AnsibleError as e:
+            return RoleMetadata(), ((role_path / 'meta/main.yml'), str(e))
+
     @classmethod
-    def load(cls, role_path: Path, deps_path: Path) -> Role:
+    def load_from_ans_obj(cls, role_path: Path) -> Role:
         role_path = role_path.resolve()
-        deps_path = deps_path.resolve()
-        role = cls._load_role(role_path, deps_path)
-        meta = MetaFile('meta/main.yml', role._metadata)
+        role = cls._load_role(role_path)
+        # Load the metadata
+        meta_obj, broken_meta = cls._load_metadata_obj(role_path, role)
+        meta = MetaFile.from_ans_object('meta/main.yml', meta_obj)
+        broken_meta_files = []
+        if broken_meta is not None:
+            broken_meta_files.append(broken_meta)
 
         def obj_fact_factory(
                 obj_fact: Callable[[str, mixins.SourceType], mixins.FileType]
@@ -402,17 +480,66 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
         handler_loader = partial(cls._load_tasks, r=role, handlers=True)
 
         dfs, bdfs = cls._load_files(
-                role_path / 'defaults', role._default_vars,
-                obj_fact_factory(DefaultsFile), var_loader)
+                role_path / 'defaults',
+                obj_fact_factory(DefaultVarFile.from_ans_object), var_loader)
         cfs, bcfs = cls._load_files(
-                role_path / 'vars', role._role_vars,
-                obj_fact_factory(ConstantsFile), var_loader)
+                role_path / 'vars',
+                obj_fact_factory(RoleVarFile.from_ans_object), var_loader)
         tfs, btfs = cls._load_files(
-                role_path / 'tasks', role._task_blocks,
-                obj_fact_factory(TasksFile), task_loader)
+                role_path / 'tasks',
+                obj_fact_factory(TaskFile.from_ans_object), task_loader)
         hfs, bhfs = cls._load_files(
-                role_path / 'handlers', role._handler_blocks,
-                obj_fact_factory(HandlersFile), handler_loader)
+                role_path / 'handlers',
+                obj_fact_factory(HandlerFile.from_ans_object), handler_loader)
+
+        def transform_broken(broken_file: BrokenFile) -> Tuple[str, str]:
+            path, reason = broken_file
+            return str(path.relative_to(role_path)), reason
         return cls(
-                role_path.name, meta, dfs, cfs, tfs, hfs,
-                tuple(chain(bdfs, bcfs, btfs, bhfs)))
+                role_name=role_path.name, meta_file=meta, default_var_files=dfs,
+                role_var_files=cfs, task_files=tfs, handler_files=hfs,
+                broken_files=tuple(transform_broken(broken) for broken in chain(bdfs, bcfs, btfs, bhfs, broken_meta_files)))
+
+
+
+@attr.s(auto_attribs=True)
+class StructuralRoleModel(Model):
+    role_root: Role
+    role_id: str
+    role_rev: str
+
+    @property
+    def id(self) -> str:
+        return f'{self.role_id}@{self.role_rev}'
+
+    @classmethod
+    def create(cls, role_path: Path, role_id: str, role_rev: str) -> 'StructuralRoleModel':
+        model = cls(role_root=Role.load_from_ans_obj(role_path), role_id=role_id, role_rev=role_rev)
+
+        # Make sure serialization and deserialization will work, catch problems early
+        unstructured = CONVERTER.unstructure(model.role_root)
+        assert unstructured == CONVERTER.unstructure(CONVERTER.structure(unstructured, Role))
+
+        return model
+
+
+@attr.s(auto_attribs=True)
+class MultiStructuralRoleModel(Model):
+    role_id: str
+    structural_models: Sequence[StructuralRoleModel]
+
+    @property
+    def id(self) -> str:
+        return str(self.role_id)
+
+    def dump(self, dirpath: Path) -> Path:
+        """Dump the object to disk and return its path."""
+        target = dirpath / self.role_id
+        target.write_text(CONVERTER.unstructure(self.structural_models))
+        return target
+
+    @classmethod
+    def load(cls, id: str, file_path: Path) -> object:
+        """Load an object from disk."""
+        models = CONVERTER.structure(yaml.load(file_path.read_text(), Loader=Loader), List[StructuralRoleModel])
+        return cls(id, models)
