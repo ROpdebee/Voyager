@@ -461,6 +461,8 @@ SCHEMAS: Dict[str, Dict[str, Any]] = {
         'summary_fields': {},
         'url': str,
     },
+}
+_ = {
     'users': {
         'active': True,
         'avatar_url': str,

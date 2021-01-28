@@ -24,7 +24,7 @@ from models.galaxy_schema import SCHEMAS
 from util.misc import capitalized_to_underscored
 
 
-CONVERTER = cattr.GenConverter()  # type: ignore[attr-defined]
+CONVERTER = cattr.GenConverter()
 CONVERTER.register_structure_hook(
         pendulum.DateTime,
         lambda ts, _: cast(pendulum.DateTime, pendulum.parse(ts)))
@@ -43,12 +43,14 @@ class MetadataMap:
         self.provider_namespaces: Dict[int, Any] = {}
         self.repositories: Dict[int, Any] = {}
         self.tags: Dict[int, Any] = {}
-        self.users: Dict[int, Any] = {}
+        # self.users: Dict[int, Any] = {}
         self.community_surveys: Dict[int, Any] = {}
         self.content: Dict[int, Any] = {}
         self.role_search: Dict[int, Any] = {}
 
         for page in scrape_pages:
+            if page.page_type == 'users':
+                continue
             dct = getattr(self, page.page_type)
             results = cast(
                     Sequence[Dict[str, object]], page.response['results'])
@@ -403,7 +405,7 @@ class ProviderNamespace(GalaxyEntity):
         return str(self.entity_id)
 
     @classmethod
-    def from_galaxy_json(cls, json: Dict[str, Any]) -> ProviderNamespace:  # type: ignore[misc]
+    def from_galaxy_json(cls, json: Dict[str, Any]) -> ProviderNamespace:
         # Sanity checks
         assert json['active']
         assert json['name']
@@ -812,7 +814,7 @@ class GalaxyMetadata(Model):
     repositories: Dict[int, Repository]
     roles: Dict[int, Role]
     tags: Dict[int, Tag]
-    users: Dict[int, User]
+    # users: Dict[int, User]
 
 
     @classmethod
@@ -829,7 +831,7 @@ class GalaxyMetadata(Model):
         attrs['repositories'] = _create_all(
                 meta_map.repositories.values(), Repository, surveys=attrs['community_surveys'])
         attrs['tags'] = _create_all(meta_map.tags.values(), Tag)
-        attrs['users'] = _create_all(meta_map.users.values(), User)
+        # attrs['users'] = _create_all(meta_map.users.values(), User)
 
         roles = _create_all(
                 meta_map.role_search.values(), Role, repos=attrs['repositories'],
@@ -869,8 +871,8 @@ class GalaxyMetadata(Model):
                 self.roles, directory / 'Roles.yaml')
         self._dump_dict(
                 self.tags, directory / 'Tags.yaml')
-        self._dump_dict(
-                self.users, directory / 'Users.yaml')
+        # self._dump_dict(
+        #        self.users, directory / 'Users.yaml')
 
         idx = {
             'CommunitySurvey': 'CommunitySurveys.yaml',
@@ -880,7 +882,7 @@ class GalaxyMetadata(Model):
             'Repository': 'Repositories.yaml',
             'Role': 'Roles.yaml',
             'Tag': 'Tags.yaml',
-            'User': 'Users.yaml',
+            # 'User': 'Users.yaml',
         }
         idx_path = (directory / 'index.yaml')
         idx_path.write_text(yaml.dump(idx))
@@ -888,7 +890,7 @@ class GalaxyMetadata(Model):
 
     @classmethod
     def _load_dict(cls, path: Path, entity_type: Type[_EntityType]) -> Dict[int, _EntityType]:
-        return CONVERTER.structure(  # type: ignore[no-any-return]
+        return CONVERTER.structure(
                 yaml.load(path.read_text(), Loader=Loader),
                 Dict[int, entity_type])  # type: ignore[valid-type]
 
@@ -913,6 +915,8 @@ class GalaxyMetadata(Model):
             attrs: Dict[str, Any] = {}
             for etype_str, efile in idx.items():
                 etype_attr = capitalized_to_underscored(efile.replace('.yaml', ''))
+                if etype_attr == 'users':
+                    continue
                 attrs[etype_attr] = _LazyDict(
                         direc / efile, globals()[etype_str])
         except Exception as e:

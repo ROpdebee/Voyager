@@ -7,6 +7,7 @@ from typing import (
     Collection,
     Dict,
     Generic,
+    List,
     Mapping,
     Optional,
     Sequence,
@@ -33,7 +34,7 @@ from .base import (
     BaseVariable
 )
 
-from .types import KwList, Value
+from .types import KwList, Value, convert_to_native
 
 
 # Any file
@@ -68,7 +69,8 @@ class ObjectContainerMixin(
             **kwargs: object
     ) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[call-arg]
-        self._elements = tuple(elements)
+        assert isinstance(elements, (list, set, str))
+        self._elements: List[ObjectWithParentType] = list(elements)
         for e in self._elements:
             e.parent = self
 
@@ -122,7 +124,7 @@ class KeywordsMixin:
             ans_type: Type[anspb.base.Base] = anspb.base.Base,
             extra_kws: KwList = set()
     ) -> None:
-        new_interested_kws = ((extra_kws | {'name'}) - getattr(
+        new_interested_kws = (extra_kws - getattr(
                 cls, '_interested_kw_names', set()))
         all_kws = cls.get_all_kws(ans_type)
         assert new_interested_kws.issubset(all_kws)
@@ -193,12 +195,12 @@ class KeywordsMixin:
             # HACK: Apparently Ansible doesn't use a sentinel for vars, so even if it's empty, it would be included. Don't want that
             # Putting it here because it affects both Task and Block types.
             if val is not None and kw_name != 'vars' and bool(val):
-                kws[kw_name] = val
+                kws[kw_name] = convert_to_native(val)
         return cls(*args, kws=kws, **kwargs)
 
 
     def unstructure(self) -> Mapping[str, Value]:
-        return self._raw_kws
+        return dict(self._raw_kws)
 
 
     @property

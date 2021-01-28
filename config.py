@@ -50,8 +50,3 @@ class ExtractStructuralModelsConfig(MainConfig):
     commits: Option[bool] = Option(
             'Extract a structural model for each commit. If disabled, extracts for semantic versions only.', default=False)
 
-class DiffConfig(MainConfig):
-    """Configuration for structural diffing."""
-    dump_changes: Option[bool] = Option(
-            'Dump the extracted changes to the reports directory.',
-            default=False)

@@ -175,6 +175,7 @@ class Stage(ABC, Generic[ResultType, ConfigType]):
                 results = stage.load_from_dataset()
                 from_cache = True
             except CacheMiss:
+                print(f'Results for {cls.__name__} not found in cache, running...')
                 results = stage._run_with_input()
         else:
             results = stage._run_with_input()

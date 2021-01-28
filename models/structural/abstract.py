@@ -34,7 +34,7 @@ from . import base, diff, mixins
 # Backup, since it clashes in method definition type hints if the diff method
 # is already defined in the class body.
 from . import diff as diff_mod
-from .types import AnsTaskOrBlock, Value
+from .types import AnsTaskOrBlock, Value, convert_to_native
 from .provenance import GraphvizMixin, SMGraph, pformat
 
 if TYPE_CHECKING:
@@ -195,7 +195,7 @@ class AbstractVariableFile(
 
     @classmethod
     def _from_ans_object(cls: Type[AbstractVariableFile[_CVType]], file_name: str, content: Mapping[str, Value], eltype: Type[_CVType]) -> AbstractVariableFile[_CVType]:
-        return cls(file_name=file_name, elements=[eltype(name=name, value=value) for name, value in content.items()])
+        return cls(file_name=file_name, elements=[eltype(name=convert_to_native(name), value=convert_to_native(value)) for name, value in content.items()])
 
     def unstructure(self) -> Dict[str, Any]:
         return {
@@ -430,6 +430,15 @@ class AbstractVariable(
         return [getattr(diff, self.__class__.__name__ + 'Edit')(
                 obj_id=self.id, prev_val=self.value, new_val=other.value)]
 
+    def unstructure(self) -> Dict[str, Value]:
+        return {self.name: self.value}
+
+    @classmethod
+    def structure(cls, obj: Dict[str, Value]) -> Any:
+        assert len(obj) == 1, obj
+        itm = next(iter(obj.items()))
+        return cls(name=itm[0], value=itm[1])
+
 
 _ABFile = TypeVar('_ABFile', 'AbstractBlockFile[Block]', 'AbstractBlockFile[HandlerBlock]')
 _ABType = TypeVar(
@@ -647,7 +656,7 @@ class AbstractBlock(
         diff.DiffableMixin,
         base.BaseBlock,
         ans_type=anspb.block.Block,
-        extra_kws={'block', 'rescue', 'always', 'when'}
+        extra_kws={'name', 'block', 'rescue', 'always', 'when'}
 ):
     def __init__(
             self, *args: object, **kwargs: Any
@@ -655,7 +664,7 @@ class AbstractBlock(
         super().__init__(*args, **kwargs, elements=[])
         # Initialize the elements ourselves
         task_lists = [self.block, self.rescue, self.always]
-        self._elements = tuple(
+        self._elements = list(
                 chain(*(tl for tl in task_lists if tl is not None)))
         for task in self:
             task.parent = self  # type: ignore[assignment]
@@ -669,6 +678,7 @@ class AbstractBlock(
         def convert_all(things: List[Any]) -> List[Any]:
             return [convert(thing) for thing in things]
 
+        obj = dict(obj)
         for attr in ('block', 'rescue', 'always'):
             if attr in obj:
                 obj[attr] = convert_all(obj[attr])
@@ -943,13 +953,22 @@ class AbstractBlock(
                 lambda b1, b2: b1.similarity_score(b2))
 
 
+class LoopControl(
+        mixins.KeywordsMixin,
+        base.BaseObject,
+        ans_type=anspb.loop_control.LoopControl
+):
+    pass
+
+
+
 class AbstractTask(
         mixins.KeywordsMixin,
         mixins.ChildObjectMixin[_CBType],
         diff.DiffableMixin,
         base.BaseTask,
         ans_type=anspb.task.Task,
-        extra_kws={'args', 'action', 'loop', 'loop_control', 'when'}):
+        extra_kws={'name', 'args', 'action', 'loop', 'loop_control', 'when'}):
 
     def gv_visit(self, g: SMGraph) -> None:
         g.add_node(self, '')
@@ -967,6 +986,11 @@ class AbstractTask(
         r = f'{r}\n{kw_repr}\n}}'
         return r
 
+    @classmethod
+    def _transform_loop_control(cls, ansobj: anspb.loop_control.LoopControl) -> Dict[str, Value]:
+        loop_control_inst = LoopControl.from_ans_object(ds=ansobj)  # type: ignore[arg-type]
+        return loop_control_inst.unstructure()  # type: ignore[return-value]
+
     @property
     def id(self) -> str:
         assert isinstance(self.parent, AbstractBlock)
@@ -976,10 +1000,7 @@ class AbstractTask(
         if not isinstance(other, type(self)):
             raise NotImplementedError
 
-        # If any of the important kws have changed, report an important change,
-        # otherwise log a miscellaneous edit.
-        important_edit_t = getattr(diff, self.__class__.__name__ + 'Edit')
-        misc_edit_t = getattr(diff, self.__class__.__name__ + 'MiscEdit')
+        edit_t = getattr(diff, self.__class__.__name__ + 'Edit')
 
         all_kws = self._interested_kw_names | self._misc_kw_names
         attrs1 = {
@@ -999,14 +1020,9 @@ class AbstractTask(
                 del attrs1[kw]
                 del attrs2[kw]
 
-        if (attrs1.keys() & self._interested_kw_names
-                or attrs2.keys() & self._interested_kw_names):
-            # An important kw was added/removed/was changed, report it
-            return [important_edit_t(
-                    obj_id=self.id, prev_val=attrs1, new_val=attrs2)]
         if attrs1 or attrs2:
-            # Analogous for misc. keywords
-            return [misc_edit_t(
+            # If any attrs have changed, report them all.
+            return [edit_t(
                     obj_id=self.id, prev_val=attrs1, new_val=attrs2)]
 
         # No change

@@ -41,8 +41,8 @@ class ExtractRoleMetadata(
         print('--- Role Metadata Extraction ---')
         attrs = [
                 'community_surveys', 'content', 'namespaces',
-                'provider_namespaces', 'repositories', 'roles', 'tags',
-                'users']
+                'provider_namespaces', 'repositories', 'roles', 'tags']
+                # 'users']
         for attr in attrs:
             print(f'#{attr}: {len(getattr(results["dummy"], attr))}')
 

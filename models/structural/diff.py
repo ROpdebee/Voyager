@@ -1,6 +1,9 @@
 """Structural diffing."""
+from __future__ import annotations
+
 from typing import (
         Callable,
+        Dict, Any,
         List,
         Optional,
         Sequence,
@@ -8,17 +11,31 @@ from typing import (
         Tuple,
         Type,
         TypeVar,
-        cast
+        cast,
+        TYPE_CHECKING
 )
 
+import abc
 from itertools import chain, product
 from operator import itemgetter
 from textwrap import indent
+from pathlib import Path
+import re
 
+from models.base import Model
 from .provenance import pformat
+
+if TYPE_CHECKING:
+    from .role import StructuralRoleModel, MultiStructuralRoleModel
 
 _SelfType = TypeVar('_SelfType', bound='DiffableMixin')
 _ChildType = TypeVar('_ChildType')
+
+import yaml
+try:
+    from yaml import CLoader as Loader, CDumper as Dumper
+except ImportError:
+    from yaml import Loader, Dumper  # type: ignore[misc]
 
 
 # TODO: Customizable?
@@ -195,6 +212,9 @@ class Diff:
         self.object_id = obj_id
         assert not kwargs, 'Failed to initialize subclass: left ' + str(kwargs)
 
+    def unstructure(self) -> Dict[str, Any]:
+        return {'diff_type': self.__class__.__name__, 'object_id': self.object_id}
+
 
 def _create_cls_name(obj_diff_t: Type[Diff], change_t: Type[Diff]) -> str:
     obj_name = obj_diff_t.__name__.replace('Diff', '')
@@ -233,6 +253,10 @@ class Addition(Diff):
         obj_id = self.object_id
         return f'{edit_type}({obj_id}) :\n{add}'
 
+    def unstructure(self) -> Dict[str, Any]:
+        partial = super().unstructure()
+        return {**partial, 'added_value': _maybe_unstructure(self.added_value)}
+
 
 class Removal(Diff):
     """Base class for object removals."""
@@ -247,6 +271,10 @@ class Removal(Diff):
         rem = indent(pformat(self.removed_value), ' --- ')
         obj_id = self.object_id
         return f'{edit_type}({obj_id}) :\n{rem}'
+
+    def unstructure(self) -> Dict[str, Any]:
+        partial = super().unstructure()
+        return {**partial, 'removed_value': _maybe_unstructure(self.removed_value)}
 
 
 class Relocation(Diff):
@@ -266,6 +294,10 @@ class Relocation(Diff):
         new = self.new_location
         return f'{edit_type}({objid}) :\n     {prev} --> {new}'
 
+    def unstructure(self) -> Dict[str, Any]:
+        partial = super().unstructure()
+        return {**partial, 'previous_location': _maybe_unstructure(self.previous_location), 'new_location': _maybe_unstructure(self.new_location)}
+
 
 class Edit(Diff):
     """Base class for object edits."""
@@ -283,6 +315,21 @@ class Edit(Diff):
         prev = indent(pformat(self.previous_value), ' --- ')
         new = indent(pformat(self.new_value), ' +++ ')
         return f'{edit_type}({objid}) :\n{prev}\n\n{new}'
+
+    def unstructure(self) -> Dict[str, Any]:
+        partial = super().unstructure()
+        prev_val = self.previous_value
+        return {
+            **partial,
+            'previous_value': _maybe_unstructure(self.previous_value),
+            'new_value': _maybe_unstructure(self.new_value)}
+
+
+def _maybe_unstructure(obj: Any) -> Any:
+    try:
+        return obj.unstructure()
+    except AttributeError as e:
+        return obj
 
 
 class FileDiff(Diff):
@@ -302,12 +349,12 @@ class DefaultVariableDiff(VariableDiff):
     """Diff in a default variable."""
 
 
-class ConstantVariableDiff(VariableDiff):
+class RoleVariableDiff(VariableDiff):
     """Diff in a constant variable."""
 
 
 _ = _create_ortho_diffs(
-        (DefaultVariableDiff, ConstantVariableDiff),
+        (DefaultVariableDiff, RoleVariableDiff),
         (Addition, Removal, Edit, Relocation))
 
 
@@ -315,16 +362,16 @@ class VarFileDiff(FileDiff):
     """Diff to a file in vars or defaults."""
 
 
-class DefaultsFileDiff(VarFileDiff):
+class DefaultVarFileDiff(VarFileDiff):
     """Diff to a file in defaults/."""
 
 
-class ConstantsFileDiff(VarFileDiff):
+class RoleVarFileDiff(VarFileDiff):
     """Diff to a file in vars/."""
 
 
 _ = _create_ortho_diffs(
-        (DefaultsFileDiff, ConstantsFileDiff),
+        (DefaultVarFileDiff, RoleVarFileDiff),
         (Addition, Removal, Relocation))
 
 
@@ -375,7 +422,7 @@ class MiscEdit(Edit):
 
 _ = _create_ortho_diffs(
         (TaskDiff, HandlerTaskDiff),
-        (Addition, Removal, Edit, MiscEdit, Relocation))
+        (Addition, Removal, Edit, Relocation))
 
 
 class BaseBlockDiff(Diff):
@@ -399,17 +446,137 @@ class BaseTasksFileDiff(FileDiff):
     """Diff to a tasks file (tasks or handlers)."""
 
 
-class TasksFileDiff(BaseTasksFileDiff):
+class TaskFileDiff(BaseTasksFileDiff):
     """Diff in a task block."""
 
 
-class HandlersFileDiff(BaseTasksFileDiff):
+class HandlerFileDiff(BaseTasksFileDiff):
     """Diff in a handler block."""
 
 
 _ = _create_ortho_diffs(
-        (TasksFileDiff, HandlersFileDiff),
+        (TaskFileDiff, HandlerFileDiff),
         (Addition, Removal, Relocation))
+
+
+def structure_diff_no_content(diff_dict: Dict[str, Any], diff_type: Type[Diff]) -> Diff:
+    # if diff
+    if issubclass(diff_type, Addition):
+        return diff_type(obj_id=diff_dict['object_id'], add_val=diff_dict['added_value'])
+    if issubclass(diff_type, Removal):
+        return diff_type(obj_id=diff_dict['object_id'], rem_val=diff_dict['removed_value'])
+    assert False
+
+
+def structure_add(dct: Dict[str, Any], diff_type: Type[Addition]) -> Addition:
+    return diff_type(add_val=dct['added_value'], obj_id=dct['object_id'])
+
+def structure_rem(dct: Dict[str, Any], diff_type: Type[Removal]) -> Removal:
+    return diff_type(rem_val=dct['removed_value'], obj_id=dct['object_id'])
+
+def structure_edit(dct: Dict[str, Any], diff_type: Type[Edit]) -> Edit:
+    return diff_type(prev_val=dct['previous_value'], new_val=dct['new_value'], obj_id=dct['object_id'])
+
+def structure_reloc(dct: Dict[str, Any], diff_type: Type[Relocation]) -> Relocation:
+    return diff_type(prev_loc=dct['previous_location'], new_loc=dct['new_location'], obj_id=dct['object_id'])
+
+
+def diff_structure_factory(diff_dict: Dict[str, Any]) -> Diff:
+    try:
+        diff_type = globals()[diff_dict['diff_type']]
+    except KeyError as e:
+        raise ValueError(f'Unknown diff type: {diff_type}') from e
+
+    if issubclass(diff_type, PlatformDiff) or issubclass(diff_type, DependencyDiff):
+        return structure_diff_no_content(diff_dict, diff_type)
+
+    if issubclass(diff_type, Addition):
+        return structure_add(diff_dict, diff_type)
+    if issubclass(diff_type, Removal):
+        return structure_rem(diff_dict, diff_type)
+    if issubclass(diff_type, Edit):
+        return structure_edit(diff_dict, diff_type)
+    if issubclass(diff_type, Relocation):
+        return structure_reloc(diff_dict, diff_type)
+
+    raise ValueError(f'Unknown diff type: {diff_type.__name__}')
+
+
+class DiffSet:
+    def __init__(self, old_rev: str, new_rev: str, diffs: Sequence[Diff]) -> None:
+        self.old_rev = old_rev
+        self.new_rev = new_rev
+        self.diffs = diffs
+
+    @classmethod
+    def create(self, v_old: 'StructuralRoleModel', v_new: 'StructuralRoleModel') -> DiffSet:
+        rev_old = v_old.role_rev
+        rev_new = v_new.role_rev
+        diffs = v_old.role_root.diff(v_new.role_root)
+        return DiffSet(rev_old, rev_new, diffs)
+
+    @classmethod
+    def structure(cls, data: Dict[str, Any]) -> DiffSet:
+        structured_diffs = [diff_structure_factory(diff) for diff in data['diffs']]
+        return cls(data['old_rev'], data['new_rev'], structured_diffs)
+
+    def unstructure(self) -> Dict[str, Any]:
+        return {
+            'old_rev': self.old_rev,
+            'new_rev': self.new_rev,
+            'diffs': [diff.unstructure() for diff in self.diffs]
+        }
+
+
+class StructuralRoleEvolution(Model):
+
+    def __init__(self, role_id: str, diff_sets: Sequence[DiffSet]) -> None:
+        self.role_id = role_id
+        self.diff_sets = diff_sets
+
+    @property
+    def id(self) -> str:
+        return self.role_id
+
+    @classmethod
+    def create(cls, models: 'MultiStructuralRoleModel') -> StructuralRoleEvolution:
+        all_struct_models = models.structural_models
+        if len(all_struct_models) <= 1:
+            return cls(models.role_id, [])
+
+        v1_idx = 0
+        v2_idx = 1
+        diff_sets = []
+        while v2_idx < len(all_struct_models):
+            diff_sets.append(DiffSet.create(all_struct_models[v1_idx], all_struct_models[v2_idx]))
+            v1_idx += 1
+            v2_idx += 1
+
+        inst = cls(models.role_id, diff_sets)
+
+        # Verify we can dump it
+        try:
+            unstructured = [diff_set.unstructure() for diff_set in inst.diff_sets]
+            result = yaml.safe_dump(unstructured)
+        except:
+            assert False, f'Will fail to dump {models.role_id}'
+
+        return inst
+
+    @classmethod
+    def load(cls, role_id: str, file_path: Path) -> StructuralRoleEvolution:
+        data = yaml.load(file_path.read_text(), Loader=Loader)
+        return cls(role_id, [DiffSet.structure(diff_set) for diff_set in data['diff_sets']])
+
+    def dump(self, dirpath: Path) -> Path:
+        data = {
+            'role_id': self.role_id,
+            'diff_sets': [diff_set.unstructure() for diff_set in self.diff_sets]
+        }
+        target = dirpath / (self.role_id + '.yaml')
+        target.write_text(yaml.safe_dump(data))
+        return target
+
 
 
 ###

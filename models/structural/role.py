@@ -41,13 +41,21 @@ import ansible.playbook.role.include as ansrinc
 
 from models.base import Model
 from . import abstract, base, diff, mixins
-from .types import AnsTaskOrBlock, Value
+from .types import AnsTaskOrBlock, Value, convert_to_native
 from .provenance import GraphvizMixin, SMGraph, pformat
 
 
-FileList = Tuple[mixins.FileType, ...]
-BrokenFile = Tuple[Path, str]
-Platform = Tuple[str, str]
+FileList = List[mixins.FileType]
+
+@attr.s(auto_attribs=True)
+class BrokenFile:
+    path: str
+    reason: str
+
+@attr.s(auto_attribs=True)
+class Platform:
+    name: str
+    version: str
 
 CONVERTER = cattr.GenConverter()
 
@@ -128,7 +136,7 @@ class MetaBlock(
         if not isinstance(platforms, (list, tuple)):
             return []
 
-        platforms_flat: List[Platform] = []
+        platforms_flat: List[Tuple[str, str]] = []
         for p in platforms:
             if (isinstance(p, dict) and 'name' in p and 'versions' in p
                     and isinstance(p['versions'], list)
@@ -136,19 +144,19 @@ class MetaBlock(
                 platforms_flat.extend(
                     (p['name'], v) for v in p['versions']
                     if isinstance(v, str))
-        return platforms_flat
+        return [Platform(name, version) for name, version in convert_to_native(platforms_flat)]
 
     @classmethod
     def _transform_galaxy_info(
             self, gi: Mapping[str, Value]
     ) -> Mapping[str, Value]:
-        return {k: v for k, v in gi.items() if k != 'platforms'}
+        return convert_to_native({k: v for k, v in gi.items() if k != 'platforms'})  # type: ignore[no-any-return]
 
     @classmethod
     def _transform_dependencies(
             cls, deps: Sequence[Union[str, Dict[str, str]]]
     ) -> Sequence[str]:
-        return [cls._get_dep_name(dep) for dep in deps]
+        return convert_to_native([cls._get_dep_name(dep) for dep in deps])  # type: ignore[no-any-return]
 
     @classmethod
     def _get_dep_name(cls, dep: Union[str, Dict[str, str]]) -> str:
@@ -175,18 +183,16 @@ class MetaBlock(
                         obj_id='meta', add_val=p),
                 rem_factory=lambda p: diff.PlatformRemoval(
                         obj_id='meta', rem_val=p))
-        diff_dependencies = diff.diff_set(
-                set(self.dependencies), set(other.dependencies),
-                add_factory=lambda p: diff.DependencyAddition(
-                        obj_id='meta', add_val=p),
-                rem_factory=lambda p: diff.DependencyRemoval(
-                        obj_id='meta', rem_val=p))
+        try:
+            diff_dependencies = diff.diff_set(
+                    set(self.dependencies), set(other.dependencies),
+                    add_factory=lambda p: diff.DependencyAddition(
+                            obj_id='meta', add_val=p),
+                    rem_factory=lambda p: diff.DependencyRemoval(
+                            obj_id='meta', rem_val=p))
+        except TypeError:
+            diff_dependencies = []
         diff_others = []
-        if (self.name != other.name):
-            diff_others.append(diff.MetaEdit(
-                    obj_id='meta',
-                    prev_val=self.name,
-                    new_val=other.name))
         if (self.misc_keywords != other.misc_keywords):
             diff_others.append(diff.MetaEdit(
                     obj_id='meta',
@@ -316,7 +322,6 @@ for tpe in (MetaFile, DefaultVarFile, RoleVarFile, HandlerFile, TaskFile):
     CONVERTER.register_unstructure_hook(  # type: ignore[misc]
         tpe, lambda inst: inst.unstructure())  # type: ignore[attr-defined, no-any-return]
 
-
 class RoleMetadata(ansrole.metadata.RoleMetadata):
     """Custom role to disable dependency resolving."""
 
@@ -363,7 +368,7 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
     role_var_files: FileList[RoleVarFile]
     task_files: FileList[TaskFile]
     handler_files: FileList[HandlerFile]
-    broken_files: FileList[Tuple[str, str]]
+    broken_files: FileList[BrokenFile]
     logs: List[str]  # Output from Ansible that was caught
 
     def gv_visit(self, g: SMGraph) -> None:
@@ -403,9 +408,9 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
             factory: Callable[[Path, mixins.SourceType], mixins.FileType],
             loader: Callable[[Path], mixins.SourceType],
             top_level: bool = True,
-    ) -> Tuple[FileList[mixins.FileType], Sequence[BrokenFile]]:
+    ) -> Tuple[FileList[mixins.FileType], Sequence[Tuple[Path, str]]]:
         fl: List[mixins.FileType] = []
-        broken: List[BrokenFile] = []
+        broken: List[Tuple[Path, str]] = []
         # Force the directory iterator to raise exception early, so that we
         # don't mistakenly catch an exception from a loader
         try:
@@ -427,7 +432,7 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
                         fl.append(factory(file, loader(file)))
                 except ans.errors.AnsibleError as err:
                     broken.append((file, str(err)))
-        return tuple(fl), broken
+        return list(fl), broken
 
     @staticmethod
     def _load_vars(var_path: Path, r: ansrole.Role) -> Mapping[str, Value]:
@@ -457,7 +462,7 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
 
 
     @staticmethod
-    def _load_metadata_obj(role_path: Path, role: ansrole.Role) -> Tuple[ansrole.metadata.RoleMetadata, Optional[BrokenFile]]:
+    def _load_metadata_obj(role_path: Path, role: ansrole.Role) -> Tuple[ansrole.metadata.RoleMetadata, Optional[Tuple[Path, str]]]:
         try:
             metadata_dict = role._load_role_yaml('meta')
         except ans.errors.AnsibleError as e:
@@ -510,13 +515,13 @@ class Role(GraphvizMixin, diff.DiffableMixin, gv_shape='ellipse'):
                     role_path / 'handlers',
                     obj_fact_factory(HandlerFile.from_ans_object), handler_loader)
 
-        def transform_broken(broken_file: BrokenFile) -> Tuple[str, str]:
+        def transform_broken(broken_file: Tuple[Path, str]) -> BrokenFile:
             path, reason = broken_file
-            return str(path.relative_to(role_path)), reason
+            return BrokenFile(str(path.relative_to(role_path)), reason)
         return cls(
                 role_name=role_path.name, meta_file=meta, default_var_files=dfs,
                 role_var_files=cfs, task_files=tfs, handler_files=hfs,
-                broken_files=tuple(transform_broken(broken) for broken in chain(bdfs, bcfs, btfs, bhfs, broken_meta_files)),
+                broken_files=[transform_broken(broken) for broken in chain(bdfs, bcfs, btfs, bhfs, broken_meta_files)],
                 logs=log_capture.logs)
 
 
@@ -536,8 +541,13 @@ class StructuralRoleModel(Model):
         model = cls(role_root=Role.load_from_ans_obj(role_path), role_id=role_id, role_rev=role_rev)
 
         # Make sure serialization and deserialization will work, catch problems early
-        unstructured = CONVERTER.unstructure(model.role_root)
-        assert unstructured == CONVERTER.unstructure(CONVERTER.structure(unstructured, Role))
+        # unstructured = CONVERTER.unstructure(model.role_root)
+        # assert unstructured == CONVERTER.unstructure(CONVERTER.structure(unstructured, Role))
+        # assert unstructured == CONVERTER.unstructure(model.role_root)
+
+        # Make sure we can actually dump it to a file without tags
+        can_be_serialized = yaml.safe_dump(CONVERTER.unstructure(model.role_root))
+        assert can_be_serialized
 
         return model
 
@@ -553,12 +563,25 @@ class MultiStructuralRoleModel(Model):
 
     def dump(self, dirpath: Path) -> Path:
         """Dump the object to disk and return its path."""
-        target = dirpath / self.role_id
-        target.write_text(CONVERTER.unstructure(self.structural_models))
+        target = dirpath / (self.role_id + '.yaml')
+        target.write_text(yaml.dump(CONVERTER.unstructure(self.structural_models), Dumper=Dumper))
         return target
 
     @classmethod
     def load(cls, id: str, file_path: Path) -> object:
         """Load an object from disk."""
-        models = CONVERTER.structure(yaml.load(file_path.read_text(), Loader=Loader), List[StructuralRoleModel])
-        return cls(id, models)
+        return _LazyProxy(id, file_path)
+
+
+class _LazyProxy(MultiStructuralRoleModel):
+
+    def __init__(self, role_id: str, file_path: Path) -> None:
+        self.role_id = role_id
+        self._file_path = file_path
+
+    @property
+    def structural_models(self) -> Sequence[StructuralRoleModel]:  # type: ignore[override]
+        # Restructure each time. Inefficient if accessed multiple times, but
+        # we'll only access it once when diffing and caching it would be pretty
+        # bad for memory usage.
+        return CONVERTER.structure(yaml.load(self._file_path.read_text(), Loader=Loader), List[StructuralRoleModel])

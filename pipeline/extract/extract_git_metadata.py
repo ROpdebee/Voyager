@@ -44,4 +44,4 @@ class ExtractGitMetadata(Stage[GitRepoMetadata, MainConfig], requires=Clone):
         len_all_tags = sum(len(meta.tags) for meta in results.values())
         len_all_commits = sum(len(meta.commits) for meta in results.values())
         print('--- Extract Git Metadata ---')
-        print(f'Extracted {len_all_tags} tags and {len_all_commits} commits')
+        print(f'Extracted {len_all_tags} tags and {len_all_commits} commits from {len(results)} repos')

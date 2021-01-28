@@ -21,7 +21,7 @@ API_URLS = {
     'roles': 'https://galaxy.ansible.com/api/v1/roles/',
     'role_search': 'https://galaxy.ansible.com/api/v1/search/roles/',
     'tags': 'https://galaxy.ansible.com/api/v1/tags/',
-    'users': 'https://galaxy.ansible.com/api/v1/users/',
+    # 'users': 'https://galaxy.ansible.com/api/v1/users/',
     'community_surveys': 'https://galaxy.ansible.com/api/v1/community_surveys/repository/',
     'content': 'https://galaxy.ansible.com/api/v1/content/',  # Mainly for more detailed quality scores.
 }
