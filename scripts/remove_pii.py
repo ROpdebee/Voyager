@@ -33,7 +33,7 @@ for name, f in tqdm.tqdm(gm_idx.items()):
         for pn in pns.values():
             for attr in ('avatar_url', 'company_name', 'email', 'location', 'display_name'):
                 try:
-                    del pns[attr]
+                    del pn[attr]
                 except KeyError:
                     pass
         (anon_path / 'GalaxyMetadata' / f).write_text(yaml.dump(pns, Dumper=Dumper))
@@ -70,3 +70,7 @@ for rid, mpath in tqdm.tqdm(rm_idx.items()):
                 tag[attr] = hashlib.sha1(tag[attr].encode()).hexdigest()
 
     anon_path.write_text(yaml.dump(content, Dumper=Dumper))
+
+repo_idx = yaml.load((dataset_path / 'Repositories' / 'index.yaml').read_text())
+new_idx = {gxy_id: rm_idx[repo_path] for gxy_id, repo_path in repo_idx.items()}
+(anon_rm / 'index.yaml').write_text(yaml.dump(new_idx))
