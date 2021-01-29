@@ -12,7 +12,7 @@ from util.cli import register_command, register_subcommand
 
 @register_command
 def main(config: MainConfig) -> None:
-    """Ansible Semantic Versioning tool pipeline."""
+    """Voyager: Explorer of the (Ansible) Galaxy."""
     # Let errors be handled by Click
     try:
         config.output_directory.mkdir(parents=True, exist_ok=True)
