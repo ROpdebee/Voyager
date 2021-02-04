@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "ansible_semver"
-version = "0.1.0"
-description = ""
+name = "Voyager"
+version = "2.0.0"
+description = "Explorer of the (Ansible) Galaxy"
 authors = ["Ruben Opdebeeck <ropdebee@vub.be>"]
 
 [tool.poetry.dependencies]
