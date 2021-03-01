@@ -52,10 +52,13 @@ class BrokenFile:
     path: str
     reason: str
 
-@attr.s(auto_attribs=True)
+@attr.s(auto_attribs=True, frozen=True)
 class Platform:
     name: str
     version: str
+
+    def unstructure(self) -> Any:
+        return CONVERTER.unstructure(self)
 
 CONVERTER = cattr.GenConverter()
 
@@ -113,9 +116,12 @@ class MetaBlock(
             self, kws: Dict[str, Value]
     ) -> None:
         super().__init__(kws=kws)
-
         self._platforms = self._extract_platforms(kws)
-
+        def rem_platforms(k: str, v: Any) -> Any:
+            if k == 'galaxy_info' and isinstance(v, dict):
+                return {k2: v2 for k2, v2 in v.items() if k2 != 'platforms'}
+            return v
+        self._misc_kws = {k: rem_platforms(k, v) for k, v in self._misc_kws.items()}
 
     @classmethod
     def structure(cls, obj: Dict[str, Value]) -> MetaBlock:
@@ -142,15 +148,15 @@ class MetaBlock(
                     and isinstance(p['versions'], list)
                     and isinstance(p['name'], str)):
                 platforms_flat.extend(
-                    (p['name'], v) for v in p['versions']
-                    if isinstance(v, str))
+                    (p['name'], str(v)) for v in p['versions']
+                    if isinstance(v, (int, str)))
         return [Platform(name, version) for name, version in convert_to_native(platforms_flat)]
 
     @classmethod
     def _transform_galaxy_info(
             self, gi: Mapping[str, Value]
     ) -> Mapping[str, Value]:
-        return convert_to_native({k: v for k, v in gi.items() if k != 'platforms'})  # type: ignore[no-any-return]
+        return convert_to_native(gi)  # type: ignore[no-any-return]
 
     @classmethod
     def _transform_dependencies(

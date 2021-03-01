@@ -209,7 +209,7 @@ class AbstractVariableFile(
         if not isinstance(other, type(self)):
             raise NotImplementedError
 
-        var_type_name = self.__class__.__name__.replace('sFile', 'Variable')
+        var_type_name = self.__class__.__name__.replace('File', 'iable')
         var_added_t = getattr(diff, f'{var_type_name}Addition')
         var_removed_t = getattr(diff, f'{var_type_name}Removal')
 
@@ -696,36 +696,55 @@ class AbstractBlock(
 
     @overload
     @classmethod
-    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: anspb.task.Task) -> _CTType:
+    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: anspb.task.Task) -> Tuple[str, _CTType]:
         ...
     @overload
     @classmethod
-    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: anspb.block.Block) -> _CBType:
+    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: anspb.block.Block) -> Tuple[str, _CBType]:
         ...
 
     @classmethod
-    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: AnsTaskOrBlock) -> Union[_CTType, _CBType]:
-        # Nested blocks are the same block type, with this block as parent
-        if (isinstance(ans_obj, anspb.block.Block)
-                and isinstance(ans_obj._parent, anspb.block.Block)):
-            return cast(_CBType, cls.from_ans_object(ds=ans_obj))
+    def _element_factory(cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_obj: AnsTaskOrBlock) -> Tuple[str, Union[_CTType, _CBType]]:
+        # Statically imported content is replaced by the task that's actually
+        # doing the import.
+        if ((top_level_include := cls._get_top_include(ans_obj)) is not None):
+            ans_obj = top_level_include
 
-        # Nested blocks that are the result of a static import of a file are
-        # removed and replaced by the task that imported it (its parent)
+        assert isinstance(ans_obj._parent, anspb.block.Block)  # type: ignore[union-attr]
+
+        # Nested blocks are the same block type, with this block as parent
         if isinstance(ans_obj, anspb.block.Block):
-            assert ans_obj._parent is not None
-            ans_obj = ans_obj._parent
+            return (ans_obj._uuid, cast(_CBType, cls.from_ans_object(ds=ans_obj)))  # type: ignore[attr-defined]
 
         assert isinstance(ans_obj, anspb.task.Task)
         object_type = cls._get_task_type()
-        return object_type.from_ans_object(ds=ans_obj)
+        return (ans_obj._uuid, object_type.from_ans_object(ds=ans_obj))  # type: ignore[attr-defined]
 
+
+    @classmethod
+    def _get_top_include(cls, ans_obj: AnsTaskOrBlock) -> Optional[anspb.task_include.TaskInclude]:
+        parent: Optional[Union[AnsTaskOrBlock, anspb.task_include.TaskInclude]] = ans_obj
+        last_include: Optional[anspb.task_include.TaskInclude] = None
+        while parent is not None:
+            if isinstance(parent, anspb.task_include.TaskInclude):
+                last_include = parent
+            parent = parent._parent  # type: ignore[union-attr]
+
+        return last_include
 
     @classmethod
     def _task_list_transformer(
             cls: Type[AbstractBlock[_CTType, _CBType, _CBFile]], ans_objs: Sequence[AnsTaskOrBlock]
     ) -> Sequence[Union[_CTType, _CBType]]:
-        return tuple(cls._element_factory(e) for e in ans_objs)
+        seen_uuids = set()
+        unique_contents = []
+        for e in ans_objs:
+            (uuid, conv) = cls._element_factory(e)
+            if uuid not in seen_uuids:
+                unique_contents.append(conv)
+                seen_uuids.add(uuid)
+
+        return tuple(unique_contents)
 
     def __repr__(self) -> str:
         r = f'{self.__class__.__name__} {{'
@@ -1082,14 +1101,11 @@ class AbstractTask(
             raise NotImplementedError
 
         all_kws = (
-                {kw for kw in self._interested_kw_names if getattr(self, kw) is not None}
-                | {kw for kw in other._interested_kw_names if getattr(other, kw) is not None}
-                | self.misc_keywords.keys()
+                self._interested_kw_names | self.misc_keywords.keys()
                 | other.misc_keywords.keys())
         main_kw_matches = sum(
                 1 for kw in self._interested_kw_names
-                if (getattr(self, kw) == getattr(other, kw)
-                        and getattr(self, kw) is not None))
+                if getattr(self, kw) == getattr(other, kw))
         misc_kw_matches = sum(
                 1 for kw in self._misc_kw_names
                 if (kw in self.misc_keywords and kw in other.misc_keywords
